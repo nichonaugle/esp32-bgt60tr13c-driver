@@ -39,11 +39,11 @@ void app_main(void) {
         .clock_speed_hz = SPI_CLK_SPEED,       // SPI clock speed
         .mode = 0,                             // SPI mode 0: CPOL = 0, CPHA = 0
         .spics_io_num = SPI_CS_PIN,            // Chip Select pin
-        .queue_size = 32,                      // Queue size for SPI transactions
+        .queue_size = 7,                      // Queue size for SPI transactions
         .pre_cb = NULL,                        // Optional callback before transferring data
-        .command_bits = 0,
-        .address_bits = 0,
-        .flags = 0                             // Active Low CS
+        //.command_bits = 0,
+        //.address_bits = 0,
+        //.flags = 0                             // Active Low CS
     };
 
     ret = xensiv_bgt60tr13c_init(SPI_HOST, &dev_config);

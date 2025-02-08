@@ -28,12 +28,12 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
     }
     ESP_LOGI(TAG, "BGT60TR13C added to SPI bus: %d", (int)spi_host);
 
-    /* Set Speed 
+    /* Set Speed */
     ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 0U);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set SPI speed");
         return ret;
-    } */
+    } 
 
     /* Read chipid and verify */
     uint32_t chip_id = 0;
@@ -54,12 +54,12 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
         return ESP_ERR_INVALID_RESPONSE;
     }
     
-    /* Soft Reset Internals */
+    /* Soft Reset Internals 
     ret = xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_SW);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Soft Reset Failed");
         return ret;
-    }
+    } */
     return ESP_OK;
 
     /* TODO: CONFIGURE SPI SETTINGS FOR FIFO R/W Operations*/
@@ -121,12 +121,12 @@ esp_err_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr, uint32_t* data_to_recieve
     spi_transaction_t trans = {
         .length = 8 * sizeof(tx_data),    // Data length in bits (8 bits for one byte per array entry)
         .tx_buffer = tx_data,             // Pointer to data to send
-        //.rxlength = 8 * sizeof(rx_data),
+        .rxlength = 8 * sizeof(rx_data),
         .rx_buffer = rx_data,             // Pointer to buffer to receive data (set NULL if no response)
         .flags = 0,                       // Normal SPI (full-duplex)
     };
 
-    esp_err_t ret = spi_device_transmit(esp_spi_config.spi_handle, &trans);
+    esp_err_t ret = spi_device_polling_transmit(esp_spi_config.spi_handle, &trans);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "SPI transmission failed");
         return ret;
