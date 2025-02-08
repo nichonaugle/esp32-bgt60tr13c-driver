@@ -191,4 +191,8 @@
 #define XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_MSK         (0x0000FE00UL)
 #define XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_POS         (9U)
 
+/* Timeout Presets */
+/* --------------------------- */
+#define XENSIV_BGT60TR13C_RESET_WAIT_TIMEOUT             (0xFFFFFFFFU)
+
 #endif // ifndef XENSIV_BGT60TR13C_REGS_H_

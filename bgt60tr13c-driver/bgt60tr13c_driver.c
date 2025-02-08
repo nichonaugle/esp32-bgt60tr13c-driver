@@ -113,17 +113,48 @@ esp_err_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr, uint32_t* data_to_recieve
     return ESP_OK;
 }
 
-esp_err_t xensiv_bgt60tr13c_soft_reset(const xensiv_bgt60tr13c_t* dev, xensiv_bgt60tr13c_reset_t reset_type) {
-    // Reset logic
-    return ESP_OK;
-}
+esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
+    uint32_t tmp;
+    int32_t status;
 
-uint16_t xensiv_bgt60tr13c_get_fifo_size(const xensiv_bgt60tr13c_t* dev) {
-    return dev->type->fifo_size;
+    status = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_MAIN, &tmp);
+    if (status == ESP_OK)
+    {
+        tmp |= (uint32_t)reset_type;
+        status = xensiv_bgt60trxx_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp);
+    }
+
+    uint32_t timeout = XENSIV_BGT60TR13C_RESET_WAIT_TIMEOUT;
+    if (status == ESP_OK)
+    {
+        while (timeout > 0U)
+        {
+            status = xensiv_bgt60trxx_get_reg(XENSIV_BGT60TR13C_REG_MAIN, &tmp);
+            if ((status == ESP_OK) && ((tmp & (uint32_t)reset_type) == 0U))
+            {
+                break;
+            }
+            --timeout;
+        }
+    }
+
+    if (status == ESP_OK)
+    {
+        if (timeout == 0U)
+        {
+            return ESP_ERR_TIMEOUT;
+        }
+        else
+        {
+            vTaskDelay(pdMS_TO_TICKS(XENSIV_BGT60TR13C_SOFT_RESET_DELAY_MS));
+        }
+    }
+    return ESP_OK;
 }
 
 esp_err_t xensiv_bgt60tr13c_get_fifo_data(const xensiv_bgt60tr13c_t* dev, uint16_t* data, uint32_t num_samples) {
     // FIFO data reading implementation
+
     return ESP_OK;
 }
 
