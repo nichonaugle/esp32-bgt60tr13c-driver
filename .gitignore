@@ -31,5 +31,6 @@
 *.out
 *.app
 
-# Development Enviornment
+# Development Environment
 .vscode
+bgt60tr13c-driver/test/build/

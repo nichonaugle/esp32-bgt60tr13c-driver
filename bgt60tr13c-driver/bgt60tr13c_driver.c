@@ -1,4 +1,3 @@
-#include "xensiv_bgt60tr13c.h"
 #include "bgt60tr13c_driver.h"
 #include "bgt60tr13c_regs.h"
 #include "esp_log.h"
@@ -6,50 +5,75 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-static const char* TAG = "XENSIV_bgt60tr13c";
+static const char* TAG = "bgt60tr13c-driver";
 
 esp_spi_config_t esp_spi_config;
 
-esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t dev_config, spi_device_handle_t spi_handle) {
-    if (spi_host == NULL || dev_config == NULL || spi_handle == NULL) {
+esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config) {
+    if (dev_config == NULL) {
+        ESP_LOGE(TAG, "Failed to init BGT60TR13C: SPI config is NULL");
         return ESP_ERR_INVALID_ARG;
     }
     
     /* Local storage of the SPI settings for use by the radar */
-    esp_spi_presets_t esp_spi_config = {
-        .spi_host = spi_host,
-        .dev_config = dev_config,
-        .spi_handle = spi_handle
-    };
+    esp_spi_config.spi_host = spi_host;
+    esp_spi_config.dev_config = *dev_config;
+    esp_spi_config.spi_handle = NULL;  // assigned once added to bus
 
     /* attach the device to the bus */
-    ret = spi_bus_add_device(spi_host, &dev_config, &spi_handle);
+    esp_err_t ret = spi_bus_add_device(esp_spi_config.spi_host, &esp_spi_config.dev_config, &esp_spi_config.spi_handle);
     if (ret != ESP_OK) {
-        ESP_LOGE("SPI", "Failed to add SPI device");
-        return;
+        ESP_LOGE(TAG, "Failed to add SPI device");
+        return ret;
     }
-    ESP_LOGI("SPI", "BGT60TR13C added to SPI bus: %d", (int)spi_host);
+    ESP_LOGI(TAG, "BGT60TR13C added to SPI bus: %d", (int)spi_host);
 
-    /* send commands to initialize the radar */
+    /* Set Speed 
+    ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 0U);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set SPI speed");
+        return ret;
+    } */
 
-    // Continue with initialization logic (chip detection, etc.)
+    /* Read chipid and verify */
+    uint32_t chip_id = 0;
+    ret = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_CHIP_ID, &chip_id);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get chip ID");
+        return ret;
+    }
+    uint32_t chip_id_digital = (chip_id & XENSIV_BGT60TR13C_REG_CHIP_ID_DIGITAL_ID_MSK) >>
+                               XENSIV_BGT60TR13C_REG_CHIP_ID_DIGITAL_ID_POS;
+    uint32_t chip_id_rf = (chip_id & XENSIV_BGT60TR13C_REG_CHIP_ID_RF_ID_MSK) >>
+                          XENSIV_BGT60TR13C_REG_CHIP_ID_RF_ID_POS;
 
+    if ((chip_id_digital == 3U) && (chip_id_rf == 3U)) {
+        ESP_LOGI(TAG, "BGT60TR13C Verified. Chip ID: %lu", chip_id);
+    } else {
+        ESP_LOGE(TAG, "BGT60TR13C Verification failed. Chip ID: %lu", chip_id);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    
+    /* Soft Reset Internals */
+    ret = xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_SW);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Soft Reset Failed");
+        return ret;
+    }
     return ESP_OK;
+
+    /* TODO: CONFIGURE SPI SETTINGS FOR FIFO R/W Operations*/
 }
 
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data_to_send) {
-    if (reg_addr == NULL || data_to_send == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    
     esp_err_t ret;
     uint32_t temp;
-    uint32_t reversed_data_to_send;
+    uint32_t reversed_data_to_send = 0;
 
     // Prepare the data by shifting and masking
-    temp = (reg_addr << XENSIV_BGT60TRXX_SPI_REGADR_POS) & XENSIV_BGT60TRXX_SPI_REGADR_MSK;
-    temp |= XENSIV_BGT60TRXX_SPI_WR_OP_MSK;  // Set write operation mask
-    temp |= (data_to_send << XENSIV_BGT60TRXX_SPI_DATA_POS) & XENSIV_BGT60TRXX_SPI_DATA_MSK;
+    temp = (reg_addr << XENSIV_BGT60TR13C_SPI_REGADR_POS) & XENSIV_BGT60TR13C_SPI_REGADR_MSK;
+    temp |= XENSIV_BGT60TR13C_SPI_WR_OP_MSK;  // Set write operation mask
+    temp |= (data_to_send << XENSIV_BGT60TR13C_SPI_DATA_POS) & XENSIV_BGT60TR13C_SPI_DATA_MSK;
 
     // Reverse the word (endianess adjustment for radar)
     reversed_data_to_send |= (temp & 0x000000FF) << 24;
@@ -58,57 +82,66 @@ esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data_to_send) {
     reversed_data_to_send |= (temp & 0xFF000000) >> 24;
 
     spi_transaction_t trans = {
-        .length = sizeof(uint32_t),    // Data length in bits (8 bits for one byte per array entry)
-        .tx_buffer = reversed_data_to_send,        // Pointer to data to send
+        .length = 32,    // Data length in bits (8 bits for one byte per array entry)
+        .tx_buffer = &reversed_data_to_send,        // Pointer to data to send
         .rx_buffer = NULL,                // Pointer to buffer to receive data (set NULL if no response)
     };
 
     ret = spi_device_transmit(esp_spi_config.spi_handle, &trans);
     if (ret != ESP_OK) {
-        ESP_LOGE("SPI", "SPI transmission failed");
+        ESP_LOGE(TAG, "SPI transmission failed");
         return ret;
     }
     return ESP_OK;
 }
 
 esp_err_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr, uint32_t* data_to_recieve) {
-    if (reg_addr == NULL || data_to_recieve == NULL) {
+    if (data_to_recieve == NULL) {
+        ESP_LOGE(TAG, "Failed to get register from BGT60TR13C: Recieving data buffer is NULL");
         return ESP_ERR_INVALID_ARG;
     }
     
-    uint32_t temp;
-    uint32_t reversed_data_to_send;
+    uint8_t tx_data[4];
+    uint8_t rx_data[4] = {0};
 
     // Prepare the data by shifting and masking
-    temp = (reg_addr << XENSIV_BGT60TR13C_SPI_REGADR_POS) & XENSIV_BGT60TR13C_SPI_REGADR_MSK;
+    uint32_t temp = (reg_addr << XENSIV_BGT60TR13C_SPI_REGADR_POS) & XENSIV_BGT60TR13C_SPI_REGADR_MSK;
 
     // Reverse the word (endianess adjustment for radar)
-    reversed_data_to_send |= (temp & 0x000000FF) << 24;
-    reversed_data_to_send |= (temp & 0x0000FF00) << 8;
-    reversed_data_to_send |= (temp & 0x00FF0000) >> 8;
-    reversed_data_to_send |= (temp & 0xFF000000) >> 24;
+    tx_data[0] = (temp >> 24) & 0xFF;
+    tx_data[1] = (temp >> 16) & 0xFF;
+    tx_data[2] = (temp >> 8) & 0xFF;
+    tx_data[3] = temp & 0xFF;
+
+    ESP_LOGI(TAG, "Received data: %d", tx_data[0]); // 0000 0100
+    ESP_LOGI(TAG, "Received data: %d", tx_data[1]); // 0000 0000
+    ESP_LOGI(TAG, "Received data: %d", tx_data[2]); // 0000 0000
+    ESP_LOGI(TAG, "Received data: %d", tx_data[3]); // 0000 0000
 
     spi_transaction_t trans = {
-        .length = sizeof(uint32_t),    // Data length in bits (8 bits for one byte per array entry)
-        .tx_buffer = reversed_data_to_send,        // Pointer to data to send
-        .rx_buffer = data_to_recieve,                // Pointer to buffer to receive data (set NULL if no response)
+        .length = 8 * sizeof(tx_data),    // Data length in bits (8 bits for one byte per array entry)
+        .tx_buffer = tx_data,             // Pointer to data to send
+        //.rxlength = 8 * sizeof(rx_data),
+        .rx_buffer = rx_data,             // Pointer to buffer to receive data (set NULL if no response)
+        .flags = 0,                       // Normal SPI (full-duplex)
     };
 
-    ret = spi_device_transmit(esp_spi_config.spi_handle, &trans);
+    esp_err_t ret = spi_device_transmit(esp_spi_config.spi_handle, &trans);
     if (ret != ESP_OK) {
-        ESP_LOGE("SPI", "SPI transmission failed");
+        ESP_LOGE(TAG, "SPI transmission failed");
         return ret;
     }
 
-    temp = *data_to_recieve;
+    temp = 0;  // Clears before use
+    temp = (rx_data[0] << 24) | (rx_data[1] << 16) | (rx_data[2] << 8) | rx_data[3];
+    ESP_LOGI(TAG, "Received data: %d", rx_data[0]); // 0000 0000
+    ESP_LOGI(TAG, "Received data: %d", rx_data[1]); // 1010 1010
+    ESP_LOGI(TAG, "Received data: %d", rx_data[2]); // 1100 1001
+    ESP_LOGI(TAG, "Received data: %d", rx_data[3]); // 0011 1111
 
     // Reverse the recieved word (endianess adjustment for radar)
-    reversed_data_to_send |= (temp & 0x000000FF) << 24;
-    reversed_data_to_send |= (temp & 0x0000FF00) << 8;
-    reversed_data_to_send |= (temp & 0x00FF0000) >> 8;
-    reversed_data_to_send |= (temp & 0xFF000000) >> 24;
 
-    *data = reversed_data_to_send & XENSIV_BGT60TR13C_SPI_DATA_MSK;
+    *data_to_recieve = (((temp & 0x000000FF) << 24) | ((temp & 0x0000FF00) << 8) | ((temp & 0x00FF0000) >> 8) | ((temp & 0xFF000000) >> 24)) & XENSIV_BGT60TR13C_SPI_DATA_MSK;
 
     return ESP_OK;
 }
@@ -121,7 +154,7 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     if (status == ESP_OK)
     {
         tmp |= (uint32_t)reset_type;
-        status = xensiv_bgt60trxx_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp);
+        status = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp);
     }
 
     uint32_t timeout = XENSIV_BGT60TR13C_RESET_WAIT_TIMEOUT;
@@ -129,7 +162,7 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     {
         while (timeout > 0U)
         {
-            status = xensiv_bgt60trxx_get_reg(XENSIV_BGT60TR13C_REG_MAIN, &tmp);
+            status = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_MAIN, &tmp);
             if ((status == ESP_OK) && ((tmp & (uint32_t)reset_type) == 0U))
             {
                 break;
@@ -149,50 +182,5 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
             vTaskDelay(pdMS_TO_TICKS(XENSIV_BGT60TR13C_SOFT_RESET_DELAY_MS));
         }
     }
-    return ESP_OK;
-}
-
-// Theres no way this function works. Fix it later
-esp_err_t xensiv_bgt60tr13c_get_fifo_data(uint16_t* data, uint32_t num_samples) {
-    // FIFO data reading implementation
-    esp_err_t ret = ESP_OK;
-    if (data == NULL || num_samples == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if ((num_samples % 2U) == 0U) {
-        ESP_LOGE(TAG, "Number of samples must be even");
-        return ESP_ERR_INVALID_ARG;
-    }
-    
-    uint32_t received_data;
-    uint32_t reversed_data_to_send;
-    uint32_t reg_addr = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD; //|
-                        //(dev->type->fifo_addr << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS);
-
-    reversed_data_to_send |= (reg_addr & 0x000000FF) << 24;
-    reversed_data_to_send |= (reg_addr & 0x0000FF00) << 8;
-    reversed_data_to_send |= (reg_addr & 0x00FF0000) >> 8;
-    reversed_data_to_send |= (reg_addr & 0xFF000000) >> 24;
-
-    /* SPI read burst mode command */
-    ret = xensiv_bgt60tr13c_get_reg(reversed_data_to_send, &received_data);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send SPI burst command");
-        return ret;
-    }
-
-    // Check the received GSR0 status (error check)
-    if ((received_data & (XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK |
-                           XENSIV_BGT60TR13C_REG_GSR0_SPI_BURST_ERR_MSK |
-                           XENSIV_BGT60TR13C_REG_GSR0_CLK_NUM_ERR_MSK)) != 0) {
-        ESP_LOGE(TAG, "FIFO read error or burst mode error");
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    return ESP_OK;
-}
-
-esp_err_t xensiv_bgt60tr13c_start_frame(const xensiv_bgt60tr13c_t* dev, bool start) {
-    // Start or stop frame logic
     return ESP_OK;
 }
