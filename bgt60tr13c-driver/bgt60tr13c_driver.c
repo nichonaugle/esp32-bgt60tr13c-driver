@@ -152,8 +152,42 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     return ESP_OK;
 }
 
-esp_err_t xensiv_bgt60tr13c_get_fifo_data(const xensiv_bgt60tr13c_t* dev, uint16_t* data, uint32_t num_samples) {
+// Theres no way this function works. Fix it later
+esp_err_t xensiv_bgt60tr13c_get_fifo_data(uint16_t* data, uint32_t num_samples) {
     // FIFO data reading implementation
+    esp_err_t ret = ESP_OK;
+    if (data == NULL || num_samples == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((num_samples % 2U) == 0U) {
+        ESP_LOGE(TAG, "Number of samples must be even");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    uint32_t received_data;
+    uint32_t reversed_data_to_send;
+    uint32_t reg_addr = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD; //|
+                        //(dev->type->fifo_addr << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS);
+
+    reversed_data_to_send |= (reg_addr & 0x000000FF) << 24;
+    reversed_data_to_send |= (reg_addr & 0x0000FF00) << 8;
+    reversed_data_to_send |= (reg_addr & 0x00FF0000) >> 8;
+    reversed_data_to_send |= (reg_addr & 0xFF000000) >> 24;
+
+    /* SPI read burst mode command */
+    ret = xensiv_bgt60tr13c_get_reg(reversed_data_to_send, &received_data);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send SPI burst command");
+        return ret;
+    }
+
+    // Check the received GSR0 status (error check)
+    if ((received_data & (XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK |
+                           XENSIV_BGT60TR13C_REG_GSR0_SPI_BURST_ERR_MSK |
+                           XENSIV_BGT60TR13C_REG_GSR0_CLK_NUM_ERR_MSK)) != 0) {
+        ESP_LOGE(TAG, "FIFO read error or burst mode error");
+        return ESP_ERR_INVALID_STATE;
+    }
 
     return ESP_OK;
 }
