@@ -11,12 +11,13 @@
 static const char * TAG = "spi-test-runner";
 
 #define SPI_HOST    SPI2_HOST          // Choose SPI2, or SPI1_HOST or SPI3_HOST
-#define SPI_CLK_SPEED   1000000        // SPI Clock speed, 10 MHz in this case
+#define SPI_CLK_SPEED   1        // SPI Clock speed (MHz), 1 MHz in this case
 
-#define SPI_CS_PIN  GPIO_NUM_4       // Chip Select pin for the device
-#define SPI_SCK_PIN GPIO_NUM_5      // SPI Clock pin
-#define SPI_MOSI_PIN GPIO_NUM_6     // SPI MOSI pin
-#define SPI_MISO_PIN GPIO_NUM_7     // SPI MISO pin
+#define SPI_CS_PIN  GPIO_NUM_4          // Chip Select pin for the device
+#define SPI_SCK_PIN GPIO_NUM_5          // SPI Clock pin
+#define SPI_MOSI_PIN GPIO_NUM_6         // SPI MOSI pin
+#define SPI_MISO_PIN GPIO_NUM_7         // SPI MISO pin
+#define RADAR_RESET_PIN GPIO_NUM_15     // Radar Reset pin active low
 
 void app_main(void) {
     // SPI bus configuration
@@ -25,30 +26,38 @@ void app_main(void) {
         .mosi_io_num = SPI_MOSI_PIN,   // MOSI Pin
         .sclk_io_num = SPI_SCK_PIN,    // Clock Pin
         .quadwp_io_num = -1,           // Not used
-        .quadhd_io_num = -1            // Not used
+        .quadhd_io_num = -1,           // Not used
+        .max_transfer_sz = 128
     };
 
     esp_err_t ret = spi_bus_initialize(SPI_HOST, &bus_config, 0); // 1 = DMA channel
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize SPI bus");
-    }
-    ESP_LOGI(TAG, "Successfully initialized bus!");
+    assert(ret == ESP_OK);
 
     // Customize SPI bus for the radar
     spi_device_interface_config_t dev_config = {
-        .clock_speed_hz = SPI_CLK_SPEED,       // SPI clock speed
-        .mode = 0,                             // SPI mode 0: CPOL = 0, CPHA = 0
-        .spics_io_num = SPI_CS_PIN,            // Chip Select pin
-        .queue_size = 7,                      // Queue size for SPI transactions
-        .pre_cb = NULL,                        // Optional callback before transferring data
-        //.command_bits = 0,
-        //.address_bits = 0,
-        //.flags = 0                             // Active Low CS
+        .clock_speed_hz = SPI_CLK_SPEED * 1000 * 1000, // 10 MHz
+        .mode = 0,                          // SPI mode 0
+        .duty_cycle_pos = 128,
+        .spics_io_num = SPI_CS_PIN,         // CS pin
+        .queue_size = 1,                    // Transaction queue size
     };
 
     ret = xensiv_bgt60tr13c_init(SPI_HOST, &dev_config);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize BGT60TR13C");
-    }
-    ESP_LOGI(TAG, "Successfully initialized BGT60TR13C!");
+    assert(ret == ESP_OK);
 }
+
+
+
+
+
+
+/* Configure RADAR_RESET_PIN as output with pull-up
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << RADAR_RESET_PIN),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+    gpio_config(&io_conf);
+    gpio_set_level(RADAR_RESET_PIN, 1);  */

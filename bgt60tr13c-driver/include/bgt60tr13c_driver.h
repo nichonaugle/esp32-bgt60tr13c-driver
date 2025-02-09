@@ -12,16 +12,10 @@ typedef enum {
     XENSIV_BGT60TR13C_RESET_FSM = 2
 } xensiv_bgt60tr13c_reset_t;
 
-typedef struct {
-    spi_host_device_t spi_host;
-    spi_device_interface_config_t dev_config;
-    spi_device_handle_t spi_handle;
-} esp_spi_config_t;
-
 /* Function prototypes */
 esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config);
-esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data_to_send);
-esp_err_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr, uint32_t *data_to_recieve);
+esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data);
+uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr);
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type);
 
 //uint16_t xensiv_bgt60tr13c_get_fifo_size(const xensiv_bgt60tr13c_t* dev);
