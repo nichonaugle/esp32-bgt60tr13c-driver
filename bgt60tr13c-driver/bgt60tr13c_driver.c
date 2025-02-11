@@ -34,7 +34,6 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
 
     /* Read chipid and verify */
     uint32_t chip_id = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_CHIP_ID);
-    ESP_LOGI(TAG, "BGT60TR13C Verified. Chip ID: %lu", chip_id);
 
     uint32_t chip_id_digital = (chip_id & XENSIV_BGT60TR13C_REG_CHIP_ID_DIGITAL_ID_MSK) >>
                                XENSIV_BGT60TR13C_REG_CHIP_ID_DIGITAL_ID_POS;
@@ -42,18 +41,18 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
                           XENSIV_BGT60TR13C_REG_CHIP_ID_RF_ID_POS;
 
     if ((chip_id_digital == 3U) && (chip_id_rf == 3U)) {
-        ESP_LOGI(TAG, "BGT60TR13C Verified. Chip ID: %lu", chip_id);
+        ESP_LOGI(TAG, "BGT60TR13C Verified. Digital Chip ID: %lu RF Chip ID: %lu", chip_id_digital, chip_id_rf);
     } else {
-        ESP_LOGE(TAG, "BGT60TR13C Verification failed. Chip ID: %lu", chip_id);
+        ESP_LOGE(TAG, "BGT60TR13C Verification failed. Returned Chip ID: %lu", chip_id);
         return ESP_ERR_INVALID_RESPONSE;
     }
     
-    /* Soft Reset Internals 
+    /* Soft Reset Internals */
     ret = xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_SW);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Soft Reset Failed");
         return ret;
-    }*/
+    }
     return ret;
 
     /* TODO: CONFIGURE SPI SETTINGS FOR FIFO R/W Operations*/
@@ -61,7 +60,6 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
 
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
     esp_err_t ret;
-    spi_transaction_t t;
     uint8_t tx_buffer[4];
 
     // Prepare the command byte (7-bit address + R/W bit)
@@ -72,41 +70,38 @@ esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
     tx_buffer[2] = (data >> 8) & 0xFF;
     tx_buffer[3] = data & 0xFF;
 
-    memset(&t, 0, sizeof(t));       // Zero out the transaction
-    t.length = 32;                  // 32 bits (1 command byte + 3 data bytes)
-    t.tx_buffer = tx_buffer;        // Data to send
-    t.user = (void*)1;              // D/C needs to be set to 1
+    spi_transaction_t t = {
+        .cmd = 0,
+        .addr = 0,
+        .length = 8 * sizeof(tx_buffer),
+        .tx_buffer = tx_buffer
+    };
     
     ret = spi_device_polling_transmit(spi, &t);  // Transmit!
     assert(ret == ESP_OK);               // Should have no issues
-
-    ESP_LOGI(TAG, "Transmitted data: %d, %d, %d, %d", tx_buffer[0], tx_buffer[1], tx_buffer[2], tx_buffer[3]);
 
     return ret;
 }
 
 uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr) {
     esp_err_t ret;
-    spi_transaction_t t;
     uint8_t tx_buffer[4] = {0};
-    uint8_t rx_buffer[4] = {0};
 
-    // Prepare the data by shifting and masking
     tx_buffer[0] = (reg_addr << 1) | 0x00; // R/W bit set to 0 for read
 
-    memset(&t, 0, sizeof(t));       // Zero out the transaction
-    t.length = 32;                  // 32 bits (1 command byte + 3 data bytes)
-    t.tx_buffer = tx_buffer;        // Data to send
-    t.rx_buffer = rx_buffer;        // Data to receive
-    t.user = (void*)1;              // D/C needs to be set to 1
+    spi_transaction_t t = {
+        .cmd = 0,
+        .addr = 0,
+        .length = 8 * sizeof(tx_buffer),
+        .tx_buffer = tx_buffer,
+        .rxlength = 8 * sizeof(tx_buffer),
+        .flags     = SPI_TRANS_USE_RXDATA
+    };
 
-    ret = spi_device_transmit(spi, &t);  // Transmit!
+    ret = spi_device_polling_transmit(spi, &t);  // Transmit!
     assert(ret == ESP_OK);               // Should have no issues
 
-    // Combine the received bytes into a 24-bit value
-    ESP_LOGI(TAG, "Transmitted Data: %lu", (uint32_t)((tx_buffer[0] << 24) | (tx_buffer[1] << 16) | (tx_buffer[2] << 8) | tx_buffer[3]));
-    ESP_LOGI(TAG, "Recieved Data: %lu", (uint32_t)((rx_buffer[0] << 24) | (rx_buffer[1] << 16) | (rx_buffer[2] << 8) | rx_buffer[3]));
-    return (rx_buffer[0] << 24) | (rx_buffer[1] << 16) | (rx_buffer[2] << 8) | rx_buffer[3];
+    return (t.rx_data[0] << 24) | (t.rx_data[1] << 16) | (t.rx_data[2] << 8) | t.rx_data[3];
 }
 
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
