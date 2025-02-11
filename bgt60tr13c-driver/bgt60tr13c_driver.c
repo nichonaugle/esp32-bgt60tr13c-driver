@@ -140,3 +140,7 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     }
     return ESP_OK;
 }
+
+esp_err_t start_bgt60tr13c_task() {
+    
+}
