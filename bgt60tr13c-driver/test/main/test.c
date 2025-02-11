@@ -11,17 +11,18 @@
 
 static const char * TAG = "spi-test-runner";
 
-#define SPI_HOST    SPI2_HOST          // Choose SPI2, or SPI1_HOST or SPI3_HOST
-#define SPI_CLK_SPEED   1        // SPI Clock speed (MHz), 1 MHz in this case
+#define SPI_HOST    SPI2_HOST           // Choose SPI2, or SPI1_HOST or SPI3_HOST
+#define SPI_CLK_SPEED   20              // SPI Clock speed (MHz), 20 MHz in this case
 
 #define SPI_CS_PIN  GPIO_NUM_13          // Chip Select pin for the device
 #define SPI_SCK_PIN GPIO_NUM_27          // SPI Clock pin
 #define SPI_MOSI_PIN GPIO_NUM_25         // SPI MOSI pin
 #define SPI_MISO_PIN GPIO_NUM_26         // SPI MISO pin
-#define RADAR_RESET_PIN GPIO_NUM_14     // Radar Reset pin active low
+#define RADAR_IRQ_PIN GPIO_NUM_4         // Radar Reset pin active low
+#define RADAR_RESET_PIN GPIO_NUM_14      // Radar Reset pin active low
 
 void app_main(void) {
-    // SPI bus configuration
+    // Recommended SPI bus configuration
     spi_bus_config_t bus_config = {
         .miso_io_num = SPI_MISO_PIN,   // MISO Pin
         .mosi_io_num = SPI_MOSI_PIN,   // MOSI Pin

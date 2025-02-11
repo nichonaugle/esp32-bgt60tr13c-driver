@@ -21,16 +21,12 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
     }
     ESP_LOGI(TAG, "BGT60TR13C added to SPI bus: %d", (int)spi_host);
 
-    vTaskDelay(100/portTICK_PERIOD_MS);  // 10ms delay
-
-    /* Set Speed */
-    ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 8192U);
+    /* FIFO Settings; Interrupt is triggered when any data enters FIFO > 0 */
+    ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 0U);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to set SPI speed");
         return ret;
     } 
-
-    vTaskDelay(100/portTICK_PERIOD_MS);  // 10ms delay
 
     /* Read chipid and verify */
     uint32_t chip_id = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_CHIP_ID);
@@ -53,9 +49,14 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
         ESP_LOGE(TAG, "Soft Reset Failed");
         return ret;
     }
-    return ret;
 
-    /* TODO: CONFIGURE SPI SETTINGS FOR FIFO R/W Operations*/
+    /* FIFO Settings; Interrupt is triggered when any data enters FIFO > 0 */
+    ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 0U);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set FIFO and interrupt settings");
+        return ret;
+    }
+    return ret;
 }
 
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
@@ -109,7 +110,6 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     int32_t status;
 
     tmp = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_MAIN);
-    ESP_LOGI(TAG, "Received Data Soft Reset: %lu", tmp); 
     tmp |= (uint32_t)reset_type;
     status = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp);
 
@@ -119,7 +119,6 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
         while (timeout > 0U)
         {
             tmp = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_MAIN);
-            ESP_LOGI(TAG, "Received Data Soft Reset in Loop: %lu", tmp); 
             if (((tmp & (uint32_t)reset_type) == 0U))
             {
                 break;
