@@ -15,7 +15,7 @@
 #define XENSIV_BGT60TR13C_CONF_FRAME_REPETITION_TIME_S (0.07727460)
 #define XENSIV_BGT60TR13C_CONF_NUM_REGS (38)
 
-const uint32_t register_list[] = { 
+const uint32_t radar_init_register_list[] = { 
 	0x001E8270,
 	0x020A0210,
 	0x08E967FD,
@@ -54,6 +54,6 @@ const uint32_t register_list[] = {
 	0x9E000100,
 	0xAC000000,
 	0xB6000000,
-}
+};
 
 #endif /* BGT60TR13C_CONFIG_H */

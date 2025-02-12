@@ -1,6 +1,7 @@
 #include <string.h>
 #include "bgt60tr13c_driver.h"
 #include "bgt60tr13c_regs.h"
+#include "bgt60tr13c_config.h"
 #include "esp_log.h"
 #include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
@@ -50,12 +51,23 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
         return ret;
     }
 
-    /* FIFO Settings; Interrupt is triggered when any data enters FIFO > 0 */
-    ret = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, 0U);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to set FIFO and interrupt settings");
-        return ret;
+    /* General settings from bgt60tr13c_config.h ; Interrupt is triggered when FIFO > 2048 bits ; HS mode off*/
+    for(uint8_t reg_idx = 0; reg_idx < XENSIV_BGT60TR13C_CONF_NUM_REGS; reg_idx++) {
+        uint32_t val = radar_init_register_list[reg_idx];
+        uint32_t reg_addr = ((val & XENSIV_BGT60TR13C_SPI_REGADR_MSK) >>
+                                XENSIV_BGT60TR13C_SPI_REGADR_POS);
+        uint32_t reg_data = ((val & XENSIV_BGT60TR13C_SPI_DATA_MSK) >>
+                                XENSIV_BGT60TR13C_SPI_DATA_POS);
+
+        ret = xensiv_bgt60tr13c_set_reg(reg_addr, reg_data);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to set register:%lu to value:%lu", reg_addr, reg_data);
+            return ret;
+        } else {
+            ESP_LOGI(TAG, "Success. Set register:%lu to value:%lu", reg_addr, reg_data);
+        }
     }
+
     return ret;
 }
 
@@ -139,8 +151,4 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
         }
     }
     return ESP_OK;
-}
-
-esp_err_t start_bgt60tr13c_task() {
-    
 }

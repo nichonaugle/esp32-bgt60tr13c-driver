@@ -21,7 +21,7 @@ if __name__ == "__main__":
         f.write("const uint32_t register_list[] = { \n")
         for hex_content in formatted_hex_array:
             f.write("\t" + hex_content + ",\n")
-        f.write("}")
+        f.write("};")
     
     print(f"Array successfully written to GENERATED_register_array.txt \nArray size was {len(formatted_hex_array)}")
 
