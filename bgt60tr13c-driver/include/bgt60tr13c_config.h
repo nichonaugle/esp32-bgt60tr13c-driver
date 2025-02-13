@@ -15,6 +15,9 @@
 #define XENSIV_BGT60TR13C_CONF_FRAME_REPETITION_TIME_S (0.07727460)
 #define XENSIV_BGT60TR13C_CONF_NUM_REGS (38)
 
+/* Added this */
+#define XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE (2048)
+
 const uint32_t radar_init_register_list[] = { 
 	0x001E8270,
 	0x020A0210,

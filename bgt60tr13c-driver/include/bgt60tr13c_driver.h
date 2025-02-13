@@ -17,6 +17,7 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data);
 uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr);
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type);
+void radar_task(void *pvParameters);
 
 //uint16_t xensiv_bgt60tr13c_get_fifo_size(const xensiv_bgt60tr13c_t* dev);
 //esp_err_t xensiv_bgt60tr13c_get_fifo_data(const xensiv_bgt60tr13c_t* dev, uint16_t* data, uint32_t num_samples);

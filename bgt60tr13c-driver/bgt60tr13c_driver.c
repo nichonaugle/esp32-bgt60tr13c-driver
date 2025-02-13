@@ -6,10 +6,16 @@
 #include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char* TAG = "bgt60tr13c-driver";
-
+static SemaphoreHandle_t radar_semaphore = NULL;
 spi_device_handle_t spi;
+
+// init memory allocated to the recieved frame defined by [ samples * chirps * rx_antennas(3) ]
+static const uint32_t frame_size = XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP * 
+                                    XENSIV_BGT60TR13C_CONF_NUM_CHIRPS_PER_FRAME * 
+                                    XENSIV_BGT60TR13C_CONF_NUM_RX_ANTENNAS;
 
 esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config) {
     assert(dev_config != NULL);
@@ -69,6 +75,102 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
     }
 
     return ret;
+}
+
+esp_err_t fifo_read(uint32_t *frame_buf, uint32_t rx_buf_size) {
+    esp_err_t ret;
+
+    // Aquire SPI bus
+    ret = spi_device_acquire_bus(spi, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGE("FIFO", "Failed to acquire SPI bus");
+        return ret;
+    }
+
+    // Create SPI transaction frame
+    spi_transaction_t t = {
+        .cmd = 0,
+        .addr = 0,
+        .length = 8 * rx_buf_size,
+        .rxlength = 8 * rx_buf_size,
+        .rx_buffer = frame_buf,
+        .flags = SPI_TRANS_USE_TXDATA
+    };
+
+    // Send Burst Read Command (based on number of frames to read divided by word size)
+    uint32_t data = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD |
+                        (XENSIV_BGT60TR13C_REG_FIFO_TR13C << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS) | 
+                        (rx_buf_size/32 << XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_POS);
+
+    t.tx_data[0] = (data >> 24) & 0xFF;
+    t.tx_data[1] = (data >> 16) & 0xFF;
+    t.tx_data[2] = (data >> 8) & 0xFF;
+    t.tx_data[3] = (data) & 0xFF;
+
+    // Perform the transaction
+    ret = spi_device_polling_transmit(spi, &t);
+    if (ret != ESP_OK) {
+        ESP_LOGE("FIFO", "SPI transaction failed");
+        spi_device_release_bus(spi);
+        return ret;
+    }
+    // De-aquire bus
+    spi_device_release_bus(spi);
+    return ret;
+}
+
+esp_err_t _print_array(uint32_t *array, uint32_t size) {
+    printf("[");
+    for(uint32_t i = 0; i < size; i++) {
+        printf("%lu", array[i]);
+        if (i < size - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+    return ESP_OK;
+}
+
+void radar_task(void *pvParameters) {
+    // initialize semaphore
+    radar_semaphore = xSemaphoreCreateBinary();
+    if (radar_semaphore == NULL) {
+        ESP_LOGE(TAG, "Failed to create semaphore");
+        vTaskDelete(NULL);
+    }
+
+    uint32_t running_buf_idx = 0;
+    uint32_t rx_buf_size = 0;
+    uint32_t *frame_buf = (uint32_t *)malloc(frame_size * sizeof(uint32_t));
+    uint32_t *temp_rx_buf = (uint32_t *)malloc(frame_size * sizeof(uint32_t));
+    if (frame_buf == NULL || temp_rx_buf == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate memory for buffers");
+        vTaskDelete(NULL);
+    }
+    memset(frame_buf, 0, frame_size * sizeof(uint32_t));
+    memset(temp_rx_buf, 0, frame_size * sizeof(uint32_t));
+    
+    for(;;) {
+        if (xSemaphoreTake(radar_semaphore, portMAX_DELAY) == pdTRUE) {
+            fifo_read(temp_rx_buf, XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE);
+            for (uint16_t i = 0; i < rx_buf_size; i++) {
+                if (running_buf_idx == frame_size) {
+                    _print_array(frame_buf, frame_size);
+                    memset(frame_buf, 0, sizeof(frame_buf));
+                    running_buf_idx = 0;
+                }
+                frame_buf[running_buf_idx] = temp_rx_buf[i];
+                running_buf_idx++;
+            }
+    
+            memset(temp_rx_buf, 0, sizeof(temp_rx_buf));
+            xSemaphoreGive(radar_semaphore);
+        }
+    }
+
+    // Free the allocated buffers
+    free(frame_buf);
+    free(temp_rx_buf);
 }
 
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
