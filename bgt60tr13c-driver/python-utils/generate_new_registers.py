@@ -18,7 +18,7 @@ if __name__ == "__main__":
                 formatted_hex_array.append(format_to_32_bit_hex(int(sections[1], 16), int(sections[2], 16)))
 
     with open(DEFAULT_REGISTER_TXT + "/GENERATED_register_array.txt", "w") as f:
-        f.write("const uint32_t register_list[] = { \n")
+        f.write("const uint32_t radar_init_register_list[] = { \n")
         for hex_content in formatted_hex_array:
             f.write("\t" + hex_content + ",\n")
         f.write("};")

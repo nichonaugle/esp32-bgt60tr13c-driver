@@ -18,7 +18,7 @@
 /* Added this */
 #define XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE (2048)
 
-const uint32_t register_list[] = { 
+const uint32_t radar_init_register_list[] = { 
 	0x001E8270,
 	0x020A0210,
 	0x08E967FD,

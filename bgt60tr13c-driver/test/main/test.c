@@ -50,8 +50,8 @@ void app_main(void) {
         .queue_size = 1,                    // Transaction queue size
     };
     
-    ret = xensiv_bgt60tr13c_init(SPI_HOST, &dev_config);
+    ret = xensiv_bgt60tr13c_init(SPI_HOST, &dev_config, RADAR_IRQ_PIN);
     assert(ret == ESP_OK);
 
-    xTaskCreate(radar_task, "radar_task", 16384, NULL, 10, NULL);
+    xTaskCreate(xensiv_bgt60tr13c_radar_task, "radar-task", 4096, NULL, 10, NULL);
 }
