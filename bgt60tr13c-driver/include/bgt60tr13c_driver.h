@@ -13,15 +13,16 @@ typedef enum {
     XENSIV_BGT60TR13C_RESET_FSM = 2
 } xensiv_bgt60tr13c_reset_t;
 
-/* Function prototypes */
-esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config, gpio_num_t interrupt_pin);
-void xensiv_bgt60tr13c_radar_task(void *pvParameters);
-void IRAM_ATTR gpio_radar_isr_handler(void *arg);
+/* Function prototypes for setup */
+esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config);
+esp_err_t xensiv_bgt60tr13c_configure();
 
 /* Register control prototypes */
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data);
 uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr);
+esp_err_t xensiv_bgt60tr13c_start_frame_capture();
 esp_err_t xensiv_bgt60tr13c_fifo_read(uint32_t *frame_buf, uint32_t rx_buf_size);
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type);
+esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code);
 
 #endif /* XENSIV_BGT60TR13C_H */
