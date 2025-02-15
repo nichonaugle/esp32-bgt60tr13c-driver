@@ -10,7 +10,7 @@
 
 static const char* TAG = "bgt60tr13c-driver";
 spi_device_handle_t spi;
-bool radar_configured;
+bool radar_configured = false;
 
 /* Determine size of recieved frame defined by [ samples * chirps * rx_antennas(3) ] */
 static uint32_t frame_size = XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP * 
@@ -43,16 +43,15 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
     ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_SW), TAG, "Failed to soft reset radar SW");
 
     /* General settings from bgt60tr13c_config.h ; Interrupt is triggered when FIFO > 2048 bits ; HS mode off */
-    /* Bypass FIFO error notification on configuration */
-    radar_configured = false;
     ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_configure(), TAG, "Failed to configure radar registers");
+
+    /* Bypass FIFO error notification while configuring */
     radar_configured = true;
 
     return ESP_OK;
 }
 
 esp_err_t xensiv_bgt60tr13c_configure() {
-    esp_err_t ret;
     for(uint8_t reg_idx = 0; reg_idx < XENSIV_BGT60TR13C_CONF_NUM_REGS; reg_idx++) {
         uint32_t val = radar_init_register_list[reg_idx];
         uint32_t reg_addr = ((val & XENSIV_BGT60TR13C_SPI_REGADR_MSK) >>
@@ -60,15 +59,9 @@ esp_err_t xensiv_bgt60tr13c_configure() {
         uint32_t reg_data = ((val & XENSIV_BGT60TR13C_SPI_DATA_MSK) >>
                                 XENSIV_BGT60TR13C_SPI_DATA_POS);
 
-        ret = xensiv_bgt60tr13c_set_reg(reg_addr, reg_data);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to set register:%lu to value:%lu", reg_addr, reg_data);
-            return ret;
-        } else {
-            ESP_LOGI(TAG, "Success. Set register:%lu to value:%lu", reg_addr, reg_data);
-        }
+        xensiv_bgt60tr13c_set_reg(reg_addr, reg_data, true);
     }
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
@@ -78,8 +71,11 @@ esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
     /* Masks with command to start frame capture */
     tx_data |= XENSIV_BGT60TR13C_REG_MAIN_FRAME_START_MSK;
 
-    /* Sets register to start frame capture */
-    ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tx_data), TAG, "Failed to start radar frame capture");
+    /* Masks with command to start frame capture */
+    tx_data |= XENSIV_BGT60TR13C_REG_MAIN_FRAME_START_MSK;
+    
+    /* Sets register to start frame capture. verification is false since it is a write only bit in the register */
+    ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tx_data, false), TAG, "Failed to start radar frame capture");
 
     return ESP_OK;
 }
@@ -130,7 +126,7 @@ esp_err_t xensiv_bgt60tr13c_fifo_read(uint32_t *frame_buf, uint32_t rx_buf_size)
     return ret;
 }
 
-esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
+esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data, bool verify_transaction) {
     /* Prepare the command byte (7-bit address + R/W bit) */
     uint8_t tx_buffer[4];
 
@@ -155,6 +151,15 @@ esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data) {
     /* GSR0 error code logging */
     ESP_ERROR_CHECK_WITHOUT_ABORT(xensiv_bgt60tr13c_check_gsr0_err(t.rx_data[0]));
 
+    if (verify_transaction) {
+        uint32_t check_rx = xensiv_bgt60tr13c_get_reg(reg_addr) & 0x00FFFFFF;
+        uint32_t check_tx = data & 0x00FFFFFF;
+        if (check_rx != check_tx) {
+            ESP_LOGW(TAG, "Verification for transaction failed. Tried to write: %lu, instead register reads: %lu", check_tx, check_rx);
+        } else {
+            ESP_LOGI(TAG, "Transaction verified. Successful write to register %lu", reg_addr);
+        }
+    }
     return ESP_OK;
 }
 
@@ -187,7 +192,7 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
 
     tmp = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_MAIN);
     tmp |= (uint32_t)reset_type;
-    status = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp);
+    status = xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tmp, false);
 
     uint32_t timeout = XENSIV_BGT60TR13C_RESET_WAIT_TIMEOUT;
     if (status == ESP_OK)
@@ -217,6 +222,16 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
     return ESP_OK;
 }
 
+esp_err_t get_frame_size(uint32_t *external_frame_size) {
+    *external_frame_size = frame_size;
+    return ESP_OK;
+}
+
+esp_err_t get_interrupt_frame_size_trigger(uint32_t *external_frame_size) {
+    *external_frame_size = XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE;
+    return ESP_OK;
+}
+
 esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code) {
     esp_err_t ret = ESP_OK;
     /* Assuming error code is 8 bits with MSB on the left */
@@ -232,9 +247,9 @@ esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code) {
         ESP_LOGE(TAG, "SPI BURST READ ERROR OCCURRED");
         ret = ESP_ERR_INVALID_RESPONSE;
     }
-    if (error_masked & XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK & radar_configured) {
-        ESP_LOGE(TAG, "RADAR FIFO OVERFLOW/UNDERFLOW ERROR OCCURRED");
-        ret = ESP_ERR_INVALID_RESPONSE;
+    if ((error_masked & XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK) && radar_configured) {
+        ESP_LOGW(TAG, "RADAR FIFO OVERFLOW/UNDERFLOW ERROR DETECTED");
+        ret = ESP_OK;
     }
 
     return ret;
