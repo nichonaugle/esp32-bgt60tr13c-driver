@@ -165,10 +165,10 @@
 
 /* Fields of register GSR0 */
 /* ------------------------ */
-#define XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK           (0x01UL)     /*!< FOU_ERR: msk */
-#define XENSIV_BGT60TR13C_REG_GSR0_MISO_HS_READ_MSK      (0x02UL)     /*!< MISO_HS_READ: msk */
-#define XENSIV_BGT60TR13C_REG_GSR0_SPI_BURST_ERR_MSK     (0x04UL)     /*!< SPI_BURST_ERR: msk */
-#define XENSIV_BGT60TR13C_REG_GSR0_CLK_NUM_ERR_MSK       (0x08UL)     /*!< CLK_NUM_ERR: msk */
+#define XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK           (0x08UL)     /*!< FOU_ERR: msk. Flipped from 0x01 to 0x08 since ESP recieves logic MSB */
+#define XENSIV_BGT60TR13C_REG_GSR0_MISO_HS_READ_MSK      (0x04UL)     /*!< MISO_HS_READ: msk. Flipped from 0x02 to 0x04 since ESP recieves logic MSB */
+#define XENSIV_BGT60TR13C_REG_GSR0_SPI_BURST_ERR_MSK     (0x02UL)     /*!< SPI_BURST_ERR: msk. Flipped from 0x04 to 0x02 since ESP recieves logic MSB */
+#define XENSIV_BGT60TR13C_REG_GSR0_CLK_NUM_ERR_MSK       (0x01UL)     /*!< CLK_NUM_ERR: msk. Flipped from 0x08 to 0x01 since ESP recieves logic MSB */
 
 /* SPI Fields for bit shifting */
 /* --------------------------- */

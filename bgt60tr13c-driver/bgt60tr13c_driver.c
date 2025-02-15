@@ -10,6 +10,7 @@
 
 static const char* TAG = "bgt60tr13c-driver";
 spi_device_handle_t spi;
+bool radar_configured;
 
 /* Determine size of recieved frame defined by [ samples * chirps * rx_antennas(3) ] */
 static uint32_t frame_size = XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP * 
@@ -42,7 +43,10 @@ esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interfac
     ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_SW), TAG, "Failed to soft reset radar SW");
 
     /* General settings from bgt60tr13c_config.h ; Interrupt is triggered when FIFO > 2048 bits ; HS mode off */
+    /* Bypass FIFO error notification on configuration */
+    radar_configured = false;
     ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_configure(), TAG, "Failed to configure radar registers");
+    radar_configured = true;
 
     return ESP_OK;
 }
@@ -215,7 +219,6 @@ esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
 
 esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code) {
     esp_err_t ret = ESP_OK;
-    ESP_LOGI(TAG, "GSR is %d", gsr0_err_code);
     /* Assuming error code is 8 bits with MSB on the left */
     uint8_t error_masked = gsr0_err_code & (XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK |
                                             XENSIV_BGT60TR13C_REG_GSR0_SPI_BURST_ERR_MSK |
@@ -229,7 +232,7 @@ esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code) {
         ESP_LOGE(TAG, "SPI BURST READ ERROR OCCURRED");
         ret = ESP_ERR_INVALID_RESPONSE;
     }
-    if (error_masked & XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK) {
+    if (error_masked & XENSIV_BGT60TR13C_REG_GSR0_FOU_ERR_MSK & radar_configured) {
         ESP_LOGE(TAG, "RADAR FIFO OVERFLOW/UNDERFLOW ERROR OCCURRED");
         ret = ESP_ERR_INVALID_RESPONSE;
     }
