@@ -78,15 +78,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
 
                     snprintf(log_buffer + offset, sizeof(log_buffer) - offset, "]\n");
                     ESP_LOGI(TAG, "%s", log_buffer); 
-                     
-                    printf("[");
-                    for(uint32_t i = 0; i < frame_size; i++) {
-                        printf("%lu", frame_buf[i]);
-                        if (i < frame_size - 1) {
-                            printf(", ");
-                        }
-                    }
-                    printf("]\n");*//*
+                    
                     memset(frame_buf, 0, frame_size * sizeof(uint32_t));
                     running_buf_idx = 0;
                 }
@@ -140,7 +132,7 @@ void app_main(void) {
         .pin_bit_mask = (1ULL << RADAR_IRQ_PIN),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .pull_down_en = GPIO_PULLUP_DISABLE,
         .intr_type = GPIO_INTR_POSEDGE  // Trigger on falling edge
     };
     gpio_config(&io_conf);
@@ -151,8 +143,8 @@ void app_main(void) {
         vTaskDelete(NULL);
     }
 
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(RADAR_IRQ_PIN, gpio_radar_isr_handler, NULL);
+    ESP_ERROR_CHECK(gpio_install_isr_service(0));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(RADAR_IRQ_PIN, gpio_radar_isr_handler, NULL));
 
     xTaskCreate(xensiv_bgt60tr13c_radar_task, "radar-task", 16384, NULL, 10, NULL);
 }
