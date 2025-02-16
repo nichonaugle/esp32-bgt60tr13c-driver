@@ -5,12 +5,24 @@
 #include <stdbool.h>
 #include "esp_err.h"
 #include "driver/spi_master.h"
+#include "bgt60tr13c_regs.h"
 #include "driver/gpio.h"
 
 /* Reset types */
 typedef enum {
-    XENSIV_BGT60TR13C_RESET_SW = 1,
-    XENSIV_BGT60TR13C_RESET_FSM = 2
+    /*! Software reset.
+        Resets all registers to default state.
+        Resets all internal counters (e.g. shape, frame).
+        Perform FIFO reset. Perform FSM reset */
+    XENSIV_BGT60TR13C_RESET_SW = 0x1 << XENSIV_BGT60TR13C_REG_MAIN_RESET_POS,
+    /*! FSM reset.
+        Resets FSM to deep sleep mode.
+        Resets FSM internal counters for channel/shape set and timers */
+    XENSIV_BGT60TR13C_RESET_FSM = 0x2 << XENSIV_BGT60TR13C_REG_MAIN_RESET_POS,
+    /*! FIFO reset.
+        Reset the read and write pointers of the FIFO.
+        Perform an implicit FSM reset */
+    XENSIV_BGT60TR13C_RESET_FIFO = 0x4 << XENSIV_BGT60TR13C_REG_MAIN_RESET_POS
 } xensiv_bgt60tr13c_reset_t;
 
 /* Function prototypes for setup */
@@ -21,7 +33,7 @@ esp_err_t xensiv_bgt60tr13c_configure();
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data, bool verify_transaction);
 uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr);
 esp_err_t xensiv_bgt60tr13c_start_frame_capture();
-esp_err_t xensiv_bgt60tr13c_fifo_read(uint32_t *frame_buf, uint32_t rx_buf_size);
+esp_err_t xensiv_bgt60tr13c_fifo_read(uint16_t *frame_buf, uint32_t words_to_read);
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type);
 esp_err_t get_frame_size(uint32_t *external_frame_size);
 esp_err_t get_interrupt_frame_size_trigger(uint32_t *external_frame_size);

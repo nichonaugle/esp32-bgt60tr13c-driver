@@ -1,4 +1,4 @@
-This is where if gets tricky. If youa re going to use this script, place all of your registers exported from the RADAR IDE provided by Infineon. This will generate the register initialization array and set that up correctly, however it will not calcualte the top level definitions as seen below: 
+This is where if gets tricky. If you are going to use this script, place all of your registers exported from the RADAR IDE provided by Infineon. This will generate the register initialization array and set that up correctly, however it will not calcualte the top level definitions as seen below: 
 
 #define XENSIV_BGT60TR13C_CONF_NUM_RX_ANTENNAS (3)
 #define XENSIV_BGT60TR13C_CONF_NUM_TX_ANTENNAS (1)

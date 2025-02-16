@@ -34,66 +34,33 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
     ESP_LOGI(TAG, "starting radar task");
 
     /* Variable initialization */
-    uint32_t running_buf_idx = 0;
     uint32_t frame_size = 0;
     uint32_t irq_frame_size = 0;
+
     ESP_ERROR_CHECK(get_frame_size(&frame_size));
     ESP_ERROR_CHECK(get_interrupt_frame_size_trigger(&irq_frame_size));
 
     /* Real and temp frame buffer initializtion */
-    uint32_t *frame_buf = (uint32_t *)malloc(frame_size * sizeof(uint32_t));
-    uint32_t *temp_rx_buf = (uint32_t *)malloc(frame_size * sizeof(uint32_t));
-    if (frame_buf == NULL || temp_rx_buf == NULL) {
+    uint16_t *rx_frame_buf = (uint16_t *)malloc(frame_size * sizeof(uint16_t));
+    if (rx_frame_buf == NULL) {
         ESP_LOGE(TAG, "Failed to allocate memory for buffers");
         vTaskDelete(NULL);
     }
-    memset(frame_buf, 0, frame_size * sizeof(uint32_t));
-    memset(temp_rx_buf, 0, frame_size * sizeof(uint32_t));
+    memset(rx_frame_buf, 0, frame_size * sizeof(uint16_t));
 
     /* Start a frame collection (only one) */
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_start_frame_capture());
 
+    /* Collect Frames Till Complete */
     for(;;) {
-        ESP_LOGI(TAG, "In loop, waiting for IRQ...");
         if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
             ESP_LOGI(TAG, "reading fifo");
-            xensiv_bgt60tr13c_fifo_read(temp_rx_buf, irq_frame_size);
-            for (uint16_t i = 0; i < irq_frame_size; i++) {
-                if (running_buf_idx == frame_size) {
-                    char log_buffer[frame_size];  // Adjust size based on expected array length
-                    int offset = 0;
-
-                    offset += snprintf(log_buffer + offset, sizeof(log_buffer) - offset, "[");
-
-                    for (uint32_t i = 0; i < frame_size; i++) {
-                        if (offset < sizeof(log_buffer) - 20) {  // Prevent buffer overflow
-                            offset += snprintf(log_buffer + offset, sizeof(log_buffer) - offset, "%lu", frame_buf[i]);
-                            if (i < frame_size - 1) {
-                                offset += snprintf(log_buffer + offset, sizeof(log_buffer) - offset, ", ");
-                            }
-                        } else {
-                            break;  // Stop writing if buffer is full
-                        }
-                    }
-
-                    snprintf(log_buffer + offset, sizeof(log_buffer) - offset, "]\n");
-                    ESP_LOGI(TAG, "%s", log_buffer); 
-                    
-                    memset(frame_buf, 0, frame_size * sizeof(uint32_t));
-                    running_buf_idx = 0;
-                }
-                frame_buf[running_buf_idx] = temp_rx_buf[i];
-                running_buf_idx++;
-            }
-    
-            memset(temp_rx_buf, 0, frame_size * sizeof(uint32_t));
-            //xSemaphoreGive(xSemaphore);
+            xensiv_bgt60tr13c_fifo_read(rx_frame_buf, irq_frame_size);
         }
     }
 
-    // Free the allocated buffers
-    free(frame_buf);
-    free(temp_rx_buf);
+    /* Free the allocated buffers */
+    free(rx_frame_buf);
 }
 
 void app_main(void) {

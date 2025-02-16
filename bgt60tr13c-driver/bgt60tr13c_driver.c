@@ -80,7 +80,7 @@ esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
     return ESP_OK;
 }
 
-esp_err_t xensiv_bgt60tr13c_fifo_read(uint32_t *frame_buf, uint32_t rx_buf_size) {
+esp_err_t xensiv_bgt60tr13c_fifo_read(uint16_t *frame_buf, uint32_t rx_buf_size) {
     esp_err_t ret;
 
     /* Aquire SPI bus */
