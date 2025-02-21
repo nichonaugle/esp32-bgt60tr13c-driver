@@ -36,31 +36,62 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
     /* Variable initialization */
     uint32_t frame_size = 0;
     uint32_t irq_frame_size = 0;
-
     ESP_ERROR_CHECK(get_frame_size(&frame_size));
     ESP_ERROR_CHECK(get_interrupt_frame_size_trigger(&irq_frame_size));
 
     /* Real and temp frame buffer initializtion */
-    uint16_t *rx_frame_buf = (uint16_t *)malloc(frame_size * sizeof(uint16_t));
-    if (rx_frame_buf == NULL) {
+    uint32_t frame_buf_len = frame_size;                        // Times three since word size is 24 bits and buffer size is in bytes
+    uint32_t temp_buf_len = 1023;                               // Times three since word size is 24 bits and buffer size is in bytes
+    uint16_t *frame_buf = (uint16_t *)malloc(frame_buf_len * sizeof(uint16_t));    // Stores 12-bit values
+    uint8_t *temp_buf = (uint8_t *)malloc(temp_buf_len * sizeof(uint8_t));
+    if (frame_buf == NULL || temp_buf == NULL) {
         ESP_LOGE(TAG, "Failed to allocate memory for buffers");
         vTaskDelete(NULL);
     }
-    memset(rx_frame_buf, 0, frame_size * sizeof(uint16_t));
+    memset(frame_buf, 0, frame_buf_len);
+    memset(temp_buf, 0, temp_buf_len);
+
+    // DEBUG REMOVE ME
+    ESP_LOGI(TAG, "frame_size: %lu", frame_size);
+    ESP_LOGI(TAG, "irq_frame_size: %lu", irq_frame_size);
+    ESP_LOGI(TAG, "frame_buf_len: %lu", frame_buf_len);
+    ESP_LOGI(TAG, "temp_buf_len: %lu", temp_buf_len);
 
     /* Start a frame collection (only one) */
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_start_frame_capture());
 
     /* Collect Frames Till Complete */
-    for(;;) {
+    uint32_t current_idx = 0;
+    uint32_t print_counter = 0; // Track when to print
+
+    for (;;) {
         if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG, "reading fifo");
-            xensiv_bgt60tr13c_fifo_read(rx_frame_buf, irq_frame_size);
+            xensiv_bgt60tr13c_fifo_read(temp_buf, temp_buf_len, irq_frame_size);
+
+            for (uint32_t idx = 0; idx < temp_buf_len && current_idx < frame_buf_len; idx += 3, current_idx += 2) {
+                frame_buf[current_idx] = (temp_buf[idx] << 4) | (temp_buf[idx + 1] >> 4);
+                frame_buf[current_idx + 1] = ((temp_buf[idx + 1] & 0x0F) << 8) | temp_buf[idx + 2];
+            }
+
+            memset(temp_buf, 0, temp_buf_len);
+
+            if (current_idx >= frame_size) {
+                ESP_LOGI(TAG, "Final frame collected.");
+                vSemaphoreDelete(xSemaphore); // Delete semaphore when frame is complete
+                printf("Frame: [");
+                for (uint32_t i = 0; i < frame_size - 1; i++) {
+                    printf("%d, ", frame_buf[i]);
+                }
+                printf("%d", frame_buf[frame_size - 1]);
+                printf("]\n");
+                vTaskDelay(portMAX_DELAY);
+            }
         }
     }
 
     /* Free the allocated buffers */
-    free(rx_frame_buf);
+    free(frame_buf);
+    free(temp_buf);
 }
 
 void app_main(void) {

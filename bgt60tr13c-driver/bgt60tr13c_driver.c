@@ -80,20 +80,24 @@ esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
     return ESP_OK;
 }
 
-esp_err_t xensiv_bgt60tr13c_fifo_read(uint16_t *frame_buf, uint32_t rx_buf_size) {
-    esp_err_t ret;
+esp_err_t xensiv_bgt60tr13c_fifo_read(uint8_t *frame_buf, uint32_t buf_size, uint32_t words_to_read) {
+    /* Ensure buffer size is valid */
+    if (((buf_size % 3) != 0) & ((buf_size * 3) != (words_to_read / 2))) {
+        ESP_LOGE(TAG, "Invalid buffer size. Must be a multiple of 3");
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     /* Aquire SPI bus */
-    ret = spi_device_acquire_bus(spi, portMAX_DELAY);
+    esp_err_t ret = spi_device_acquire_bus(spi, portMAX_DELAY);
     if (ret != ESP_OK) {
         ESP_LOGE("FIFO", "Failed to acquire SPI bus");
         return ret;
     }
 
-    /* Send Burst Read Command (based on number of frames to read divided by word size of 32 bits) */
+    /* Send Burst Read Command (based on number of frames to read divided by word size of 24 bits. Each data block is 12 bits) */
     uint32_t data = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD |
                         (XENSIV_BGT60TR13C_REG_FIFO_TR13C << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS) | 
-                        ((rx_buf_size / 32) << XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_POS);
+                        (words_to_read << XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_POS);
 
     /* Setup tx data buffer */
     uint8_t tx_data[4] = {0};
@@ -102,13 +106,13 @@ esp_err_t xensiv_bgt60tr13c_fifo_read(uint16_t *frame_buf, uint32_t rx_buf_size)
     tx_data[2] = (data >> 8) & 0xFF;
     tx_data[3] = (data) & 0xFF;
 
-    /* Create SPI transaction frame */
+    /* Create SPI transaction frame, length is converted from bytes to bits */
     spi_transaction_t t = {
         .cmd = 0,
         .addr = 0,
-        .length = 8 * rx_buf_size,
+        .length = buf_size * 8,
         .tx_buffer = tx_data,
-        .rxlength = 8 * rx_buf_size,
+        .rxlength = buf_size * 8,
         .rx_buffer = frame_buf,
         .flags = 0
     };

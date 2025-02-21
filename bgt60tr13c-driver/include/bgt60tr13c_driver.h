@@ -33,7 +33,7 @@ esp_err_t xensiv_bgt60tr13c_configure();
 esp_err_t xensiv_bgt60tr13c_set_reg(uint32_t reg_addr, uint32_t data, bool verify_transaction);
 uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr);
 esp_err_t xensiv_bgt60tr13c_start_frame_capture();
-esp_err_t xensiv_bgt60tr13c_fifo_read(uint16_t *frame_buf, uint32_t words_to_read);
+esp_err_t xensiv_bgt60tr13c_fifo_read(uint8_t *frame_buf, uint32_t buf_size, uint32_t words_to_read);
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type);
 esp_err_t get_frame_size(uint32_t *external_frame_size);
 esp_err_t get_interrupt_frame_size_trigger(uint32_t *external_frame_size);
