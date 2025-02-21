@@ -6,17 +6,21 @@ chirps_per_sample = 64
 samples_per_frame = 32
 num_of_channels = 3
 
-rx_frame_1 = np.zeros((samples_per_frame, num_of_channels), dtype=np.complex64)
-rx_frame_2 = np.zeros((samples_per_frame, num_of_channels), dtype=np.complex64)
-rx_frame_3 = np.zeros((samples_per_frame, num_of_channels), dtype=np.complex64)
+rx_frame_1 = np.zeros((chirps_per_sample, samples_per_frame), dtype=np.complex64)
+rx_frame_2 = np.zeros((chirps_per_sample, samples_per_frame), dtype=np.complex64)
+rx_frame_3 = np.zeros((chirps_per_sample, samples_per_frame), dtype=np.complex64)
 
 for i in range(len(demo_arr)):
-    if i % 3 == 0:
-        rx_frame_1[i // 3] = demo_arr[i]
-    elif i % 3 == 1:
-        rx_frame_2[i // 3] = demo_arr[i]
+    chirp_idx = (i // (samples_per_frame * num_of_channels)) % chirps_per_sample
+    sample_idx = (i // num_of_channels) % samples_per_frame
+    channel_idx = i % num_of_channels
+    
+    if channel_idx == 0:
+        rx_frame_1[chirp_idx, sample_idx] = demo_arr[i]
+    elif channel_idx == 1:
+        rx_frame_2[chirp_idx, sample_idx] = demo_arr[i]
     else:
-        rx_frame_3[i // 3] = demo_arr[i]
+        rx_frame_3[chirp_idx, sample_idx] = demo_arr[i]
 
 print(rx_frame_1)
 print(rx_frame_2)
