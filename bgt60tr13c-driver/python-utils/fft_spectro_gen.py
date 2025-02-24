@@ -25,3 +25,9 @@ for i in range(len(demo_arr)):
 print(rx_frame_1)
 print(rx_frame_2)
 print(rx_frame_3)
+
+# Add in FFTs here to derive IRQ
+
+#Add in frame management logic
+
+# Create spectrogram of velocity with respect to distance
