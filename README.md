@@ -1,4 +1,8 @@
-# esp32-bgt60tr13c-driver
+# Espressif BGT60TR13C Driver
+
+The BGT60TR13C is a powerful radar sensor featuring 3 RX and 1 TX antenna, but its setup and usage can be complex. This driver simplifies the integration process, allowing developers to focus on signal processing algorithms rather than low-level interfacing. It manages all register control and is designed to capture three 64×32 frames, returning 12-bit words in a 16-bit array.
+
+Additionally, included Python scripts enable the generation of different frame sizes. However, modifying some header files may be necessary to accommodate these changes.
 
 ## Installation
 
