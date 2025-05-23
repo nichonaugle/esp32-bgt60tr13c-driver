@@ -22,8 +22,6 @@ static const char * TAG = "spi-test-runner";
 #define SPI_MISO_PIN GPIO_NUM_26 
 #define RADAR_IRQ_PIN GPIO_NUM_4 
 #define RADAR_RESET_PIN GPIO_NUM_14
-
-// How many samples to print before yielding
 #define PRINT_CHUNK_BEFORE_YIELD 32 // Reduced from 128 to yield more often
 
 SemaphoreHandle_t xSemaphore = NULL;
@@ -100,9 +98,6 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                 ESP_LOGE(TAG, "FIFO read error: %s. Resetting frame progress. Total frames before error: %lu", esp_err_to_name(err_check), total_frames_collected_count);
                 current_idx = 0;
                 memset(frame_buf, 0, frame_size_samples * sizeof(uint16_t));
-                // If FIFO errors persist, more robust recovery might be needed here,
-                // such as resetting radar FIFO and re-triggering frame capture.
-                // For now, just reset buffer and hope next IRQ comes.
                 vTaskDelay(pdMS_TO_TICKS(100)); // Delay after error before trying again
                 ESP_LOGI(TAG, "Attempting to re-start frame capture after FIFO error.");
                 xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_FIFO); // Reset FIFO
@@ -137,24 +132,19 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                     if (i < frame_size_samples - 1) {
                         printf(", ");
                     }
-                    // Yield more frequently during printing
                     if ((i > 0 && (i % PRINT_CHUNK_BEFORE_YIELD == 0))) {
-                        vTaskDelay(pdMS_TO_TICKS(1)); // Yield for 1ms
+                        vTaskDelay(pdMS_TO_TICKS(1));
                     }
                 }
                 printf("]\n");
-                fflush(stdout); // Ensure data is sent out
+                fflush(stdout);
                 ESP_LOGI(TAG, "Finished printing frame %lu.", total_frames_collected_count);
-
-                // Significant delay after printing a full frame to allow system to recover
-                // and hopefully allow the radar to be ready for the next sequence.
                 ESP_LOGI(TAG, "Delaying for system recovery after print...");
-                vTaskDelay(pdMS_TO_TICKS(500)); // Increase this delay if it still stops. Try 500ms, 1s, or more.
+                vTaskDelay(pdMS_TO_TICKS(500));
 
                 current_idx = 0;
                 memset(frame_buf, 0, frame_size_samples * sizeof(uint16_t)); 
                 
-                // After a long print, radar FIFO is likely overflowed and needs reset.
                 ESP_LOGI(TAG, "Resetting FIFO and re-triggering frame capture for next frame.");
                 err_check = xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_FIFO);
                 if (err_check != ESP_OK) {
@@ -181,10 +171,6 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
 }
 
 void app_main(void) {
-    // NOTE: Ensure UART baud rate is set high in menuconfig for faster printing.
-    // e.g., idf.py menuconfig -> Component config -> ESP System Settings -> Channel for console output -> UART Baud Rate
-    // Set to 921600 or higher if your setup supports it.
-
     esp_err_t ret; 
     spi_bus_config_t bus_config = {
         .miso_io_num = SPI_MISO_PIN,
@@ -243,7 +229,7 @@ void app_main(void) {
         ESP_LOGI(TAG, "Successfully set CCR2 for endless frames.");
     }
     uint32_t new_ccr2_val = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_CCR2);
-    ESP_LOGI(TAG, "New CCR2 value read back: 0x%08lX", new_ccr2_val);
+    ESP_LOGI(TAG, "New CCR2 value read back: 0x%08lX", new_ccr2_val);// This is always different than what I set for some reason
 
     if ((new_ccr2_val & 0x00000FFF) != 0) {
         ESP_LOGW(TAG, "MAX_FRAME_CNT in CCR2 (0x%08lX) is not 0 after setting! Value: 0x%lX. Continuous mode might not be enabled.", new_ccr2_val, (new_ccr2_val & 0xFFF));
