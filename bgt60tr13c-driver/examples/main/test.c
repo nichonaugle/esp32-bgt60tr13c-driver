@@ -81,18 +81,8 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
 
     for (;;) {
         if (xSemaphoreTake(xSemaphore, portMAX_DELAY) == pdTRUE) {
-            uint32_t num_words_to_request_this_burst = temp_buf_len_bytes / 3;
-            uint32_t len_val_for_driver_call = 0;
-
-            if (num_words_to_request_this_burst > 0) {
-                if (num_words_to_request_this_burst > 128) { 
-                    num_words_to_request_this_burst = 128;
-                }
-                len_val_for_driver_call = num_words_to_request_this_burst - 1;
-            }
-            
             memset(temp_buf, 0, temp_buf_len_bytes); 
-            err_check = xensiv_bgt60tr13c_fifo_read(temp_buf, temp_buf_len_bytes, len_val_for_driver_call);
+            err_check = xensiv_bgt60tr13c_fifo_read(temp_buf, temp_buf_len_bytes, 0);
 
             if (err_check != ESP_OK) {
                 ESP_LOGE(TAG, "FIFO read error: %s. Resetting frame progress. Total frames before error: %lu", esp_err_to_name(err_check), total_frames_collected_count);

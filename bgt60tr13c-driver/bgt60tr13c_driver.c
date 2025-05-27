@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdlib.h>
 #include "bgt60tr13c_driver.h"
 #include "bgt60tr13c_regs.h"
 #include "bgt60tr13c_config.h"
@@ -12,13 +13,21 @@ static const char* TAG = "bgt60tr13c-driver";
 spi_device_handle_t spi;
 bool radar_configured = false;
 
-/* Determine size of recieved frame defined by [ samples * chirps * rx_antennas(3) ] */
+/* Determine size of received frame defined by [ samples * chirps * rx_antennas(3) ] */
 static uint32_t frame_size = XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP * 
                                     XENSIV_BGT60TR13C_CONF_NUM_CHIRPS_PER_FRAME * 
                                     XENSIV_BGT60TR13C_CONF_NUM_RX_ANTENNAS;
 
+/* Word reverse function for ESP32 - converts between big/little endian */
+uint32_t xensiv_bgt60tr13c_platform_word_reverse(uint32_t word) {
+    return ((word & 0x000000FF) << 24) |
+           ((word & 0x0000FF00) << 8) |
+           ((word & 0x00FF0000) >> 8) |
+           ((word & 0xFF000000) >> 24);
+}
+
 esp_err_t xensiv_bgt60tr13c_init(spi_host_device_t spi_host, spi_device_interface_config_t *dev_config) {
-    /* Ensure the dev_config is has been configured */
+    /* Ensure the dev_config has been configured */
     assert(dev_config != NULL);
     
     /* attach the device to the spi bus */
@@ -70,9 +79,6 @@ esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
 
     /* Masks with command to start frame capture */
     tx_data |= XENSIV_BGT60TR13C_REG_MAIN_FRAME_START_MSK;
-
-    /* Masks with command to start frame capture */
-    tx_data |= XENSIV_BGT60TR13C_REG_MAIN_FRAME_START_MSK;
     
     /* Sets register to start frame capture. verification is false since it is a write only bit in the register */
     ESP_RETURN_ON_ERROR(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_MAIN, tx_data, false), TAG, "Failed to start radar frame capture");
@@ -81,51 +87,88 @@ esp_err_t xensiv_bgt60tr13c_start_frame_capture() {
 }
 
 esp_err_t xensiv_bgt60tr13c_fifo_read(uint8_t *frame_buf, uint32_t buf_size, uint32_t words_to_read) {
-    /* Ensure buffer size is valid */
-    if (((buf_size % 3) != 0) & ((buf_size * 3) != (words_to_read / 2))) {
+    /* Ensure buffer size is valid - must be multiple of 3 for 24-bit FIFO words */
+    if ((buf_size % 3) != 0) {
         ESP_LOGE(TAG, "Invalid buffer size. Must be a multiple of 3");
         return ESP_ERR_INVALID_SIZE;
     }
 
-    /* Aquire SPI bus */
+    /* Acquire SPI bus */
     esp_err_t ret = spi_device_acquire_bus(spi, portMAX_DELAY);
     if (ret != ESP_OK) {
         ESP_LOGE("FIFO", "Failed to acquire SPI bus");
         return ret;
     }
 
-    /* Send Burst Read Command (based on number of frames to read divided by word size of 24 bits. Each data block is 12 bits) */
-    uint32_t data = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD |
-                        (XENSIV_BGT60TR13C_REG_FIFO_TR13C << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS) | 
-                        (words_to_read << XENSIV_BGT60TR13C_SPI_BURST_MODE_LEN_POS);
+    /* 
+     * Build Burst Read Command 
+     * According to datasheet Table 52: Use NBURSTS=0 for unbounded read
+     */
+    uint32_t burst_cmd = XENSIV_BGT60TR13C_SPI_BURST_MODE_CMD |
+                         (XENSIV_BGT60TR13C_REG_FIFO_TR13C << XENSIV_BGT60TR13C_SPI_BURST_MODE_SADR_POS);
+    // RWB=0 for read, NBURSTS=0 for unbounded - these are already 0 by default
 
-    /* Setup tx data buffer */
-    uint8_t tx_data[4] = {0};
-    tx_data[0] = (data >> 24) & 0xFF;
-    tx_data[1] = (data >> 16) & 0xFF;
-    tx_data[2] = (data >> 8) & 0xFF;
-    tx_data[3] = (data) & 0xFF;
+    /* Apply word reversal for correct byte order on ESP32 */
+    burst_cmd = xensiv_bgt60tr13c_platform_word_reverse(burst_cmd);
 
-    /* Create SPI transaction frame, length is converted from bytes to bits */
-    spi_transaction_t t = {
+    /* 
+     * Create buffers for the complete transaction:
+     * TX: 4 bytes (burst command) + buf_size bytes (dummy data for clocking)
+     * RX: 4 bytes (GSR0 + padding) + buf_size bytes (actual FIFO data)
+     */
+    uint32_t total_length = 4 + buf_size;
+    uint8_t *tx_buffer = calloc(total_length, 1);
+    uint8_t *rx_buffer = malloc(total_length);
+    
+    if (tx_buffer == NULL || rx_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate transaction buffers");
+        free(tx_buffer);
+        free(rx_buffer);
+        spi_device_release_bus(spi);
+        return ESP_ERR_NO_MEM;
+    }
+
+    /* Copy burst command to TX buffer */
+    memcpy(tx_buffer, &burst_cmd, 4);
+    /* Rest of TX buffer is already zeros (dummy bytes for clocking out FIFO data) */
+
+    /* 
+     * Single SPI transaction: Send command + dummy bytes, receive GSR0 + FIFO data
+     * This follows the datasheet Figure 54 protocol in one continuous transaction
+     */
+    spi_transaction_t transaction = {
         .cmd = 0,
         .addr = 0,
-        .length = buf_size * 8,
-        .tx_buffer = tx_data,
-        .rxlength = buf_size * 8,
-        .rx_buffer = frame_buf,
+        .length = total_length * 8,      // Total TX length in bits
+        .tx_buffer = tx_buffer,
+        .rxlength = total_length * 8,    // Total RX length in bits  
+        .rx_buffer = rx_buffer,
         .flags = 0
     };
 
-    /* Perform the transaction */
-    ret = spi_device_polling_transmit(spi, &t);
-
-    /* De-aquire bus */
-    spi_device_release_bus(spi);
+    ret = spi_device_polling_transmit(spi, &transaction);
     
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI transaction failed");
+    if (ret == ESP_OK) {
+        /* Check GSR0 for errors (first byte of received data) */
+        uint8_t gsr0_status = rx_buffer[0];
+        ret = xensiv_bgt60tr13c_check_gsr0_err(gsr0_status);
+        
+        if (ret == ESP_OK) {
+            /* Copy FIFO data (skip first 4 bytes which are GSR0 + padding) */
+            memcpy(frame_buf, &rx_buffer[4], buf_size);
+        } else {
+            ESP_LOGE(TAG, "GSR0 error detected: 0x%02X", gsr0_status);
+        }
+    } else {
+        ESP_LOGE(TAG, "SPI FIFO transaction failed");
     }
+
+    /* Clean up buffers */
+    free(tx_buffer);
+    free(rx_buffer);
+
+    /* Release bus */
+    spi_device_release_bus(spi);
 
     return ret;
 }

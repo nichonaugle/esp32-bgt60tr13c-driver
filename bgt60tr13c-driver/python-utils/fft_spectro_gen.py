@@ -9,7 +9,7 @@ import re
 # --- Radar Configuration ---
 # !!! IMPORTANT: NEEDS to match the bgt60tr13c_config.h on the ESP32 !!!
 NUM_CHIRPS_PER_FRAME = 32
-NUM_SAMPLES_PER_CHIRP = 128
+NUM_SAMPLES_PER_CHIRP = 64
 NUM_RX_ANTENNAS = 3
 # Expected samples = chirps * samples_per_chirp * antennas
 EXPECTED_SAMPLES_IN_FLAT_ARRAY = NUM_CHIRPS_PER_FRAME * NUM_SAMPLES_PER_CHIRP * NUM_RX_ANTENNAS
