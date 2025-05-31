@@ -1,431 +1,597 @@
-import numpy as np
 import matplotlib
 matplotlib.use('TkAgg')
+import numpy as np
+from scipy import signal
+from scipy.signal import windows
+from scipy import constants
 import matplotlib.pyplot as plt
-import serial
 import time
+import serial
 import re
+import traceback
 import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-from collections import deque
-import json
-import os
-# New dependency for clustering
-from scipy.ndimage import label
+from tkinter import ttk
 
-# --- Radar Configuration ---
+# Radar Configuration
 NUM_CHIRPS_PER_FRAME = 64
 NUM_SAMPLES_PER_CHIRP = 128
-NUM_RX_ANTENNAS = 3
-EXPECTED_SAMPLES_IN_FLAT_ARRAY = NUM_CHIRPS_PER_FRAME * NUM_SAMPLES_PER_CHIRP * NUM_RX_ANTENNAS
+NUM_RX_ANTENNAS = 1
 
-# Serial config
+START_FREQUENCY_HZ = 58000000000
+END_FREQUENCY_HZ = 59000000000
+SAMPLE_RATE_HZ = 200000
+CHIRP_REPETITION_TIME_S = 0.00059111
+
+# Hardcoded Settings
 SERIAL_PORT = '/dev/tty.SLAB_USBtoUART2'
 BAUD_RATE = 921600
+PROCESSING_FRAMERATE_HZ = 10
 
-class SimpleCalibration:
+EXPECTED_SAMPLES_IN_FLAT_ARRAY = NUM_CHIRPS_PER_FRAME * NUM_SAMPLES_PER_CHIRP * NUM_RX_ANTENNAS
+
+# Constants for signal handling
+BINS_TO_SKIP_FOR_PEAK_DETECTION = 15
+BINS_TO_IGNORE_FOR_PLOT_YLIM = 15
+
+# Initial Filtering Configuration
+CALIBRATION_KEY = 'c'
+INITIAL_THRESHOLD_1D_PROFILE_LINEAR = 0.05
+INITIAL_THRESHOLD_2D_MAG_LINEAR = 0.1
+FILTERING_FLOOR_1D_PROFILE_LINEAR = 0.0
+FILTERING_FLOOR_2D_MAG_LINEAR = 1e-9
+
+# AppState Class
+class AppState:
     def __init__(self):
-        self.range_baseline = None
-        self.doppler_baseline = None
-        self.is_calibrating = False
-
-        # Sensitivity Controls
-        self.range_sensitivity = 8.0   # dB above baseline for presence
-        self.motion_sensitivity = 3.0  # Energy threshold (dB) for a pixel to be considered for motion
-        self.min_cluster_size = 4      # Number of connected pixels to count as valid motion
-
-        print("Simple calibration initialized")
-
-    def start_calibration(self):
-        self.is_calibrating = True
-        print("Ready to calibrate EMPTY ROOM - will use next frame as NO-PRESENCE baseline...")
-
-    def calibrate_with_current_frame(self, range_fft_db, range_doppler_db):
-        if not self.is_calibrating:
-            return False
-
-        print("Calibrating EMPTY ROOM baseline with current frame...")
-        range_roi = range_fft_db[:, 10:50]
-        self.range_baseline = np.mean(range_roi)
-
-        center_doppler = range_doppler_db.shape[0] // 2
-        doppler_roi = range_doppler_db[center_doppler-5:center_doppler+5, :]
-        self.doppler_baseline = np.mean(doppler_roi)
-
-        self.is_calibrating = False
-        print(f"EMPTY ROOM baselines: Range={self.range_baseline:.1f} dB, Doppler={self.doppler_baseline:.1f} dB")
-        return True
-
-    def detect_presence(self, range_fft_db):
-        """ REVERTED to the original, more stable mean-based detection. """
-        if self.range_baseline is None:
-            return False, 0.0
-
-        roi = range_fft_db[:, 10:50]
-        # Reverted to using mean, as max was too sensitive.
-        current_energy = np.mean(roi)
-
-        energy_increase = current_energy - self.range_baseline
-        presence_detected = energy_increase > self.range_sensitivity
-
-        return presence_detected, energy_increase
-
-    def detect_motion(self, range_doppler_db):
-        """ ⭐ NEW: Cluster-based motion detection. """
-        if self.doppler_baseline is None:
-            return 0.0, False
-
-        # 1. Define ROI
-        # Focus on range bins where we expect targets
-        roi = range_doppler_db[:, 10:50]
-        # Ignore the very center of the doppler axis (static objects)
-        center_doppler = roi.shape[0] // 2
-        roi[center_doppler-2:center_doppler+2, :] = -100 # Effectively ignore this static zone
-
-        # 2. Thresholding
-        # Create a binary mask where any pixel above the energy threshold is 1
-        energy_threshold = self.doppler_baseline + self.motion_sensitivity
-        motion_mask = roi > energy_threshold
-
-        # 3. Find Clusters (Connected-Component Labeling)
-        # 'labeled_mask' will have a unique integer for each separate cluster
-        # 'num_features' is the number of clusters found
-        labeled_mask, num_features = label(motion_mask)
-
-        if num_features == 0:
-            return 0.0, False # No clusters found
-
-        # 4. Evaluate Clusters
-        # Get the size of each cluster
-        cluster_sizes = np.bincount(labeled_mask.ravel())[1:] # [1:] to ignore background
-
-        # Get the peak energy of each cluster
-        # This is more for future use, but it's good to have
-        peak_energies = [np.max(roi[labeled_mask == i]) for i in range(1, num_features + 1)]
+        self.calibration_requested = False
+        self.filtering_enabled = False
+        self.baseline_1d_profiles = None
+        self.baseline_2d_fft_abs = None
+        self.baseline_rd_maps_abs = None
         
-        # Calculate a motion score based on the largest cluster
-        motion_level = np.max(cluster_sizes) if cluster_sizes.size > 0 else 0.0
+        self.threshold_1d_profile = INITIAL_THRESHOLD_1D_PROFILE_LINEAR
+        self.threshold_2d_mag = INITIAL_THRESHOLD_2D_MAG_LINEAR
+        
+        self.gui_is_active = False
+        
+        print(f"Press '{CALIBRATION_KEY}' in the plot window to calibrate baseline noise.")
+        print("A separate window for threshold controls will also appear.")
 
-        # 5. Make Decision
-        # Check if any of the found clusters are larger than our minimum size
-        for size in cluster_sizes:
-            if size >= self.min_cluster_size:
-                return motion_level, True # Valid motion detected
+# Threshold GUI Setup
+def setup_threshold_gui(app_state_obj):
+    root = tk.Tk()
+    root.title("Filtering Thresholds")
+    root.geometry("300x180") 
 
-        return motion_level, False # No clusters were large enough
+    ttk.Label(root, text="1D Profile Threshold:").pack(pady=(10,0))
+    val_1d_sv = tk.StringVar(value=f"{app_state_obj.threshold_1d_profile:.3f}")
 
-    def save_calibration(self, filename="simple_radar_calibration.json"):
-        data = {
-            'range_baseline': self.range_baseline,
-            'doppler_baseline': self.doppler_baseline,
-            'range_sensitivity': self.range_sensitivity,
-            'motion_sensitivity': self.motion_sensitivity,
-            'min_cluster_size': self.min_cluster_size
-        }
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
-        print(f"Calibration saved to {filename}")
-
-    def load_calibration(self, filename="simple_radar_calibration.json"):
-        if not os.path.exists(filename):
-            return False
+    def on_1d_threshold_change(*args): 
         try:
-            with open(filename, 'r') as f:
-                data = json.load(f)
-            self.range_baseline = data.get('range_baseline')
-            self.doppler_baseline = data.get('doppler_baseline')
-            self.range_sensitivity = data.get('range_sensitivity', 8.0)
-            self.motion_sensitivity = data.get('motion_sensitivity', 3.0)
-            self.min_cluster_size = data.get('min_cluster_size', 4)
-            print(f"Calibration loaded from {filename}")
-            return True
-        except Exception as e:
-            print(f"Error loading calibration: {e}")
-            return False
+            value = float(val_1d_sv.get())
+            app_state_obj.threshold_1d_profile = value
+        except ValueError:
+            val_1d_sv.set(f"{app_state_obj.threshold_1d_profile:.3f}")
 
-# Initialize calibration
-calibration = SimpleCalibration()
+    val_1d_sv.trace_add("write", on_1d_threshold_change)
 
-# GUI for calibration controls
-class CalibrationControl:
-    def __init__(self):
-        self.window = tk.Toplevel()
-        self.window.title("Calibration Control")
-        self.window.geometry("400x550") # Increased height for new control
-        self.window.attributes('-topmost', True)
+    spinbox_1d = ttk.Spinbox(root, from_=0.0, to=1.0, increment=0.01, width=10,
+                             textvariable=val_1d_sv, format="%.3f") 
+    spinbox_1d.pack(pady=5)
 
-        self.presence_var = tk.StringVar(value="NO")
-        self.motion_var = tk.StringVar(value="NO")
-        self.motion_level_var = tk.StringVar(value="0.0")
+    ttk.Label(root, text="2D Magnitude Threshold:").pack(pady=(10,0))
+    val_2d_sv = tk.StringVar(value=f"{app_state_obj.threshold_2d_mag:.3f}")
 
-        self.latest_presence = False
-        self.latest_motion = False
-        self.latest_motion_level = 0.0
-
-        self.setup_gui()
-        self.fast_update_gui()
-
-    def setup_gui(self):
-        main_frame = ttk.Frame(self.window)
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-
-        cal_frame = ttk.LabelFrame(main_frame, text="Calibration")
-        cal_frame.pack(fill='x', pady=(0, 10))
-
-        button_frame = ttk.Frame(cal_frame)
-        button_frame.pack(fill='x', padx=5, pady=5)
-        ttk.Button(button_frame, text="Start Calibration", command=self.start_calibration).pack(side='left', padx=(0, 5))
-        ttk.Button(button_frame, text="Save", command=self.save_calibration).pack(side='left', padx=(0, 5))
-        ttk.Button(button_frame, text="Load", command=self.load_calibration).pack(side='left')
-        self.cal_status = ttk.Label(cal_frame, text="Ready to calibrate")
-        self.cal_status.pack(pady=5)
-
-        status_frame = ttk.LabelFrame(main_frame, text="Detection Status")
-        status_frame.pack(fill='x', pady=(0, 10))
-        ttk.Label(status_frame, text="Presence:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
-        ttk.Label(status_frame, textvariable=self.presence_var, font=('Arial', 10, 'bold')).grid(row=0, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(status_frame, text="Motion:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
-        ttk.Label(status_frame, textvariable=self.motion_var, font=('Arial', 10, 'bold')).grid(row=1, column=1, sticky='w', padx=5, pady=2)
-        ttk.Label(status_frame, text="Largest Cluster:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
-        ttk.Label(status_frame, textvariable=self.motion_level_var).grid(row=2, column=1, sticky='w', padx=5, pady=2)
-
-        sens_frame = ttk.LabelFrame(main_frame, text="Sensitivity")
-        sens_frame.pack(fill='x', pady=(0, 10))
-
-        ttk.Label(sens_frame, text="Presence Sensitivity (dB):").pack(anchor='w', padx=5, pady=(5, 0))
-        self.range_var = tk.DoubleVar(value=calibration.range_sensitivity)
-        range_spinbox = ttk.Spinbox(sens_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.range_var, command=self.update_sensitivities, width=8)
-        range_spinbox.pack(anchor='w', padx=5, pady=2)
-        self.range_var.trace_add('write', self.update_sensitivities)
-
-        ttk.Label(sens_frame, text="Motion Energy Threshold (dB):").pack(anchor='w', padx=5, pady=(10, 0))
-        self.motion_sens_var = tk.DoubleVar(value=calibration.motion_sensitivity)
-        motion_spinbox = ttk.Spinbox(sens_frame, from_=-10.0, to=20.0, increment=0.1, textvariable=self.motion_sens_var, command=self.update_sensitivities, width=8)
-        motion_spinbox.pack(anchor='w', padx=5, pady=2)
-        self.motion_sens_var.trace_add('write', self.update_sensitivities)
-
-        # ⭐ NEW CONTROL for cluster size
-        ttk.Label(sens_frame, text="Min Cluster Size (pixels):").pack(anchor='w', padx=5, pady=(10, 0))
-        self.cluster_size_var = tk.IntVar(value=calibration.min_cluster_size)
-        cluster_spinbox = ttk.Spinbox(sens_frame, from_=1, to=100, increment=1, textvariable=self.cluster_size_var, command=self.update_sensitivities, width=8)
-        cluster_spinbox.pack(anchor='w', padx=5, pady=2)
-        self.cluster_size_var.trace_add('write', self.update_sensitivities)
-
-
-        info_frame = ttk.LabelFrame(main_frame, text="Info")
-        info_frame.pack(fill='both', expand=True)
-        self.info_text = tk.Text(info_frame, height=8, wrap=tk.WORD)
-        self.info_text.pack(fill='both', expand=True, padx=5, pady=5)
-        self.update_info()
-
-    def update_sensitivities(self, *args):
+    def on_2d_threshold_change(*args):
         try:
-            calibration.range_sensitivity = self.range_var.get()
-            calibration.motion_sensitivity = self.motion_sens_var.get()
-            calibration.min_cluster_size = self.cluster_size_var.get()
-            self.update_info()
-        except (tk.TclError, ValueError):
-            pass
+            value = float(val_2d_sv.get())
+            app_state_obj.threshold_2d_mag = value
+        except ValueError:
+            val_2d_sv.set(f"{app_state_obj.threshold_2d_mag:.3f}")
 
-    def start_calibration(self):
-        calibration.start_calibration()
-        self.cal_status.config(text="Calibrating EMPTY ROOM with next frame...")
+    val_2d_sv.trace_add("write", on_2d_threshold_change)
 
-    def save_calibration(self):
-        calibration.save_calibration()
-        messagebox.showinfo("Save", "Calibration saved!")
+    spinbox_2d = ttk.Spinbox(root, from_=0.0, to=2.0, increment=0.01, width=10,
+                             textvariable=val_2d_sv, format="%.3f")
+    spinbox_2d.pack(pady=5)
+    
+    def on_closing_gui():
+        app_state_obj.gui_is_active = False
 
-    def load_calibration(self):
-        if calibration.load_calibration():
-            self.range_var.set(calibration.range_sensitivity)
-            self.motion_sens_var.set(calibration.motion_sensitivity)
-            self.cluster_size_var.set(calibration.min_cluster_size)
-            self.update_info()
-            messagebox.showinfo("Load", "Calibration loaded!")
+    root.protocol("WM_DELETE_WINDOW", on_closing_gui)
+    app_state_obj.gui_is_active = True
+    return root
+
+# RadarConfig Class
+class RadarConfig:
+    def __init__(self, num_chirps, num_samples, start_freq, end_freq, proc_framerate_hz, sample_rate_hz, chirp_rep_time_s):
+        self.num_chirps_per_frame = num_chirps
+        self.num_samples_per_chirp = num_samples
+        self.start_frequency_Hz = start_freq
+        self.end_frequency_Hz = end_freq
+        self.frame_repetition_time_s = 1.0 / proc_framerate_hz if proc_framerate_hz > 0 else 0.01
+        self.sample_rate_Hz = sample_rate_hz
+        self.rx_mask = (1 << NUM_RX_ANTENNAS) - 1
+        self.tx_mask = 1
+        self.tx_power_level = 31
+        self.if_gain_dB = 33
+        self.chirp_repetition_time_s = chirp_rep_time_s
+
+        if (start_freq + end_freq) > 0:
+            self.center_frequency_Hz = (start_freq + end_freq) / 2.0
         else:
-            messagebox.showerror("Load", "Failed to load!")
-
-    def update_status(self, presence, motion, motion_level):
-        self.latest_presence = presence
-        self.latest_motion = motion
-        self.latest_motion_level = motion_level
-
-    def fast_update_gui(self):
-        self.presence_var.set("YES" if self.latest_presence else "NO")
-        self.motion_var.set("YES" if self.latest_motion else "NO")
-        self.motion_level_var.set(f"{self.latest_motion_level:.0f}")
-
-        if calibration.is_calibrating:
-            self.cal_status.config(text="Ready to calibrate EMPTY ROOM...")
-        elif calibration.range_baseline is not None:
-            self.cal_status.config(text="✓ Calibrated (Empty Room)")
+            self.center_frequency_Hz = (start_freq + end_freq) / 2.0 
+            print("Warning: Radar frequencies are zero or not set properly. Center frequency is zero.")
+        
+        if self.center_frequency_Hz > 0:
+            self.wavelength_m = constants.c / self.center_frequency_Hz
         else:
-            self.cal_status.config(text="Not calibrated")
-        self.window.after(100, self.fast_update_gui)
+            self.wavelength_m = 0 
+            print("Warning: Center frequency is zero. Wavelength cannot be calculated.")
 
-    def update_info(self):
-        info = "Calibration Status:\n\n"
-        if calibration.range_baseline is not None:
-            info += f"✓ Empty room range baseline: {calibration.range_baseline:.1f} dB\n"
-            info += f"✓ Empty room doppler baseline: {calibration.doppler_baseline:.1f} dB\n\n"
-            info += "Settings:\n"
-            info += f"• Presence sensitivity: {calibration.range_sensitivity:.1f} dB\n"
-            info += f"• Motion energy threshold: {calibration.motion_sensitivity:.1f} dB\n"
-            info += f"• Min cluster size: {calibration.min_cluster_size} pixels\n\n"
-            info += "Detection logic:\n"
-            info += "• Presence = AVG range energy > baseline\n"
-            info += "• Motion = Find clusters of pixels > energy threshold that are > min cluster size"
+# FFT Spectrum Function
+def fft_spectrum(data_matrix, window_vector):
+    windowed_data = data_matrix * window_vector
+    fft_size = data_matrix.shape[1] * 2 
+    complex_fft_result = np.fft.fft(windowed_data, n=fft_size, axis=1)
+    return complex_fft_result[:, :data_matrix.shape[1]] 
+
+# DistanceFFT_Algo Class
+class DistanceFFT_Algo:
+    def __init__(self, config: RadarConfig):
+        self._numchirps = config.num_chirps_per_frame
+        self.chirpsamples = config.num_samples_per_chirp
+        self._range_window = windows.blackmanharris(self.chirpsamples).reshape(1, self.chirpsamples)
+        
+        start_frequency_Hz = config.start_frequency_Hz
+        end_frequency_Hz = config.end_frequency_Hz
+        bandwidth_hz = abs(end_frequency_Hz - start_frequency_Hz)
+        fft_size_for_bin_calc = self.chirpsamples * 2 
+        
+        if bandwidth_hz > 0:
+            self._range_bin_length = (constants.c) / (2 * bandwidth_hz * (fft_size_for_bin_calc / self.chirpsamples))
         else:
-            info += "✗ Not calibrated\n\n"
-            info += "Instructions:\n1. LEAVE THE ROOM\n2. Click 'Start Calibration'\n3. Come back and adjust sensitivity\n4. Save calibration"
+            self._range_bin_length = 0
+            print("Warning: Bandwidth is zero. Range bin length cannot be calculated.")
+        
+        self._config = config
+        if self._numchirps > 0:
+            self._doppler_window = windows.hann(self._numchirps).reshape(self._numchirps, 1)
+            if config.center_frequency_Hz > 0 and config.chirp_repetition_time_s > 0:
+                doppler_freqs_shifted = np.fft.fftshift(np.fft.fftfreq(self._numchirps, d=config.chirp_repetition_time_s))
+                self._velocity_axis_mps = doppler_freqs_shifted * config.wavelength_m / 2.0
+                max_doppler_freq = 1.0 / (2.0 * config.chirp_repetition_time_s) 
+                self.max_unambiguous_velocity_mps = (max_doppler_freq * config.wavelength_m) / 2.0
+                print(f"Max unambiguous velocity: +/- {self.max_unambiguous_velocity_mps:.2f} m/s")
+            else:
+                self._velocity_axis_mps = np.zeros(self._numchirps)
+                self.max_unambiguous_velocity_mps = 0
+                print("Warning: Cannot calculate velocity axis due to zero center frequency or chirp repetition time.")
+        else:
+            self._doppler_window = np.array([]) 
+            self._velocity_axis_mps = np.array([])
+            self.max_unambiguous_velocity_mps = 0
+            print("Warning: Number of chirps is zero. Doppler processing disabled.")
 
-        self.info_text.delete(1.0, tk.END)
-        self.info_text.insert(1.0, info)
+    def _compute_range_doppler_map(self, range_fft_complex_data):
+        if self._numchirps == 0 or range_fft_complex_data.shape[0] != self._numchirps:
+            num_doppler_bins = self._numchirps if self._numchirps > 0 else 1
+            num_range_bins = range_fft_complex_data.shape[1]
+            return np.zeros((num_doppler_bins, num_range_bins))
+
+        windowed_data_for_doppler = range_fft_complex_data * self._doppler_window
+        range_doppler_fft_complex = np.fft.fft(windowed_data_for_doppler, axis=0)
+        range_doppler_fft_shifted = np.fft.fftshift(range_doppler_fft_complex, axes=0)
+        return np.abs(range_doppler_fft_shifted)
+
+    def compute_distance_and_profile(self, data):
+        range_fft_complex = fft_spectrum(data, self._range_window) 
+        fft_spec_abs_per_chirp = np.abs(range_fft_complex) 
+
+        if self._numchirps > 0:
+            data_plot_1d = np.divide(fft_spec_abs_per_chirp.sum(axis=0), self._numchirps)
+        else:
+            data_plot_1d = np.zeros(data.shape[1]) 
+        
+        skip = BINS_TO_SKIP_FOR_PEAK_DETECTION
+        peak_idx_in_slice = np.argmax(data_plot_1d[skip:]) if len(data_plot_1d[skip:]) > 0 else 0
+        actual_peak_idx = peak_idx_in_slice + skip
+        dist = self._range_bin_length * actual_peak_idx
+        
+        if self._numchirps > 0:
+            range_doppler_map_abs = self._compute_range_doppler_map(range_fft_complex)
+        else:
+            num_doppler_bins = self._numchirps if self._numchirps > 0 else 1 
+            num_range_bins = self.chirpsamples
+            range_doppler_map_abs = np.zeros((num_doppler_bins, num_range_bins))
+        return dist, data_plot_1d, fft_spec_abs_per_chirp, range_doppler_map_abs
+
+# Draw Class
+class Draw: 
+    def __init__(self, config: RadarConfig, max_range_m_calc, num_ant, range_bin_length, velocity_axis_mps, app_state: AppState):
+        self._num_ant = num_ant
+        self.config = config 
+        self.chirpsamples = config.num_samples_per_chirp
+        self.app_state = app_state 
+        
+        self._line_plots_orig = [] 
+        self._image_plots_rc_orig = [] 
+        self._colorbars_rc_orig = []   
+        self._range_doppler_plots_orig = [] 
+        self._range_doppler_colorbars_orig = [] 
+
+        self._line_plots_filt = []
+        self._image_plots_rc_filt = []
+        self._colorbars_rc_filt = []
+        self._range_doppler_plots_filt = []
+        self._range_doppler_colorbars_filt = []
+
+        self._fig, self._axs = plt.subplots(nrows=3, ncols=self._num_ant * 2, 
+                                           figsize=(7 * self._num_ant * 2, 5 * 3), 
+                                           squeeze=False) 
+        self._fig.canvas.manager.set_window_title(
+            f"Radar FFT: Left=Original, Right=Filtered (Press '{CALIBRATION_KEY}' to calibrate)")
+        
+        self.bins_to_ignore_for_1d_plot_ylim = BINS_TO_IGNORE_FOR_PLOT_YLIM 
+        self._range_bin_length = range_bin_length
+        self._velocity_axis_mps = velocity_axis_mps 
+
+        self._dist_points = np.array([i * self._range_bin_length for i in range(self.chirpsamples)])
+        self._chirp_indices = np.arange(self.config.num_chirps_per_frame)
+
+        self._fig.canvas.mpl_connect('close_event', self.close)
+        self._fig.canvas.mpl_connect('key_press_event', self._on_key_press) 
+        self._is_window_open = True
+        plt.ion() 
+
+    def _on_key_press(self, event):
+        if event.key == CALIBRATION_KEY:
+            self.app_state.calibration_requested = True 
+
+    def _get_1d_plot_ylimits(self, data_all_antennas_1d_profiles, is_filtered=False):
+        min_val_overall = float('inf')
+        max_val_overall = float('-inf')
+        for data_one_antenna in data_all_antennas_1d_profiles:
+            if not isinstance(data_one_antenna, np.ndarray) or data_one_antenna.size == 0:
+                continue
+            
+            data_for_calc = data_one_antenna
+            if not is_filtered and data_one_antenna.size > self.bins_to_ignore_for_1d_plot_ylim:
+                data_for_calc = data_one_antenna[self.bins_to_ignore_for_1d_plot_ylim:]
+            
+            if data_for_calc.size > 0: 
+                current_max = np.max(data_for_calc)
+                if current_max > max_val_overall: max_val_overall = current_max
+                current_min = np.min(data_for_calc) 
+                if current_min < min_val_overall: min_val_overall = current_min
+            
+        if max_val_overall == float('-inf'): max_val_overall = 1.0 
+        if min_val_overall == float('inf'): min_val_overall = 0.0
+        if max_val_overall <= min_val_overall: 
+            max_val_overall = min_val_overall + (0.01 if is_filtered else 0.1) 
+        
+        if is_filtered:
+             min_val_overall = min(min_val_overall, -0.01) 
+        
+        return min_val_overall, max_val_overall * (1.02 if is_filtered else 1.05) 
 
 
-# Main script logic (mostly unchanged from here)
+    def _draw_first_time(self, data_1d_orig, data_2d_rc_orig, data_rd_orig,
+                         data_1d_filt, data_2d_rc_filt, data_rd_filt):
+        
+        min_y_1d_orig_all_ant, max_y_1d_orig_all_ant = self._get_1d_plot_ylimits(data_1d_orig)
+        min_y_1d_filt_all_ant, max_y_1d_filt_all_ant = self._get_1d_plot_ylimits(data_1d_filt, is_filtered=True)
 
-def start_gui():
-    control = CalibrationControl()
-    return control
+        dist_start = self._dist_points[0] if len(self._dist_points) > 0 else 0
+        dist_end = self._dist_points[-1] if len(self._dist_points) > 0 else 1 
+        vel_start = self._velocity_axis_mps[0] if len(self._velocity_axis_mps) > 0 else -1
+        vel_end = self._velocity_axis_mps[-1] if len(self._velocity_axis_mps) > 0 else 1
+        
+        for i_ant in range(self._num_ant):
+            col_orig = i_ant * 2 
+            col_filt = i_ant * 2 + 1 
 
-control_gui = start_gui()
+            ax_orig_1d = self._axs[0, col_orig] 
+            line_o, = ax_orig_1d.plot(self._dist_points[:len(data_1d_orig[i_ant])], data_1d_orig[i_ant])
+            ax_orig_1d.set_ylim(min_y_1d_orig_all_ant, max_y_1d_orig_all_ant)
+            self._line_plots_orig.append(line_o)
+            ax_orig_1d.set_xlabel("Distance (m)"); ax_orig_1d.set_ylabel("Summed FFT Mag")
+            ax_orig_1d.set_title(f"Ant {i_ant} - Original Range")
 
-ser = None
-try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-    print(f"Serial port {SERIAL_PORT} opened successfully at {BAUD_RATE} bps.")
-    time.sleep(2)
-except serial.SerialException as e:
-    print(f"Error opening serial port {SERIAL_PORT}: {e}")
-    exit()
+            ax_filt_1d = self._axs[0, col_filt]
+            line_f, = ax_filt_1d.plot(self._dist_points[:len(data_1d_filt[i_ant])], data_1d_filt[i_ant])
+            ax_filt_1d.set_ylim(min_y_1d_filt_all_ant, max_y_1d_filt_all_ant)
+            self._line_plots_filt.append(line_f)
+            ax_filt_1d.set_xlabel("Distance (m)"); ax_filt_1d.set_ylabel("Filtered FFT Mag")
+            ax_filt_1d.set_title(f"Ant {i_ant} - Filtered Range")
 
-rx_frame_channels = [np.zeros((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP), dtype=np.float32) for _ in range(NUM_RX_ANTENNAS)]
-ANTENNA_INDEX_TO_DISPLAY = 0
+            ax_orig_rc = self._axs[1, col_orig]
+            data_2d_abs_o = data_2d_rc_orig[i_ant]; data_2d_db_o = 20 * np.log10(data_2d_abs_o + 1e-9) 
+            vmin_o, vmax_o = np.percentile(data_2d_db_o, [5, 95]) if data_2d_db_o.size > 0 else (-60, 0) 
+            if vmin_o == vmax_o: vmax_o = vmin_o + 1 
+            img_o = ax_orig_rc.imshow(data_2d_db_o, aspect='auto', cmap='viridis', origin='lower', vmin=vmin_o, vmax=vmax_o,
+                                   extent=[dist_start, dist_end, self._chirp_indices[0] - 0.5 if len(self._chirp_indices)>0 else -0.5, self._chirp_indices[-1] + 0.5 if len(self._chirp_indices)>0 else 0.5])
+            self._image_plots_rc_orig.append(img_o)
+            cb_o = self._fig.colorbar(img_o, ax=ax_orig_rc, label='Mag (dB)'); self._colorbars_rc_orig.append(cb_o)
+            ax_orig_rc.set_xlabel("Distance (m)"); ax_orig_rc.set_ylabel("Chirp Index")
+            ax_orig_rc.set_title(f"Ant {i_ant} - Orig Range/Chirp")
 
-plt.ion()
-fig, axs = plt.subplots(4, 1, figsize=(12, 20))
+            ax_filt_rc = self._axs[1, col_filt]
+            data_2d_abs_f = data_2d_rc_filt[i_ant]; data_2d_db_f = 20 * np.log10(data_2d_abs_f + FILTERING_FLOOR_2D_MAG_LINEAR) 
+            vmin_f, vmax_f = np.percentile(data_2d_db_f, [5, 98]) if data_2d_db_f.size > 0 else (-70, -10)
+            if vmin_f == vmax_f: vmax_f = vmin_f + 10
+            img_f = ax_filt_rc.imshow(data_2d_db_f, aspect='auto', cmap='viridis', origin='lower', vmin=vmin_f, vmax=vmax_f,
+                                    extent=[dist_start, dist_end, self._chirp_indices[0] - 0.5 if len(self._chirp_indices)>0 else -0.5, self._chirp_indices[-1] + 0.5 if len(self._chirp_indices)>0 else 0.5])
+            self._image_plots_rc_filt.append(img_f)
+            cb_f = self._fig.colorbar(img_f, ax=ax_filt_rc, label='Filt. Mag (dB)'); self._colorbars_rc_filt.append(cb_f)
+            ax_filt_rc.set_xlabel("Distance (m)"); ax_filt_rc.set_ylabel("Chirp Index")
+            ax_filt_rc.set_title(f"Ant {i_ant} - Filt Range/Chirp")
 
-# Plot 1: Raw data
-img_raw = axs[0].imshow(np.zeros((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP)), cmap='viridis', aspect='auto', extent=[0, NUM_SAMPLES_PER_CHIRP, 0, NUM_CHIRPS_PER_FRAME])
-cb_raw = plt.colorbar(img_raw, ax=axs[0], label='Magnitude')
-axs[0].set_xlabel('Sample Index'); axs[0].set_ylabel('Chirp Index'); axs[0].set_title(f'Raw Data (RX Ant {ANTENNA_INDEX_TO_DISPLAY + 1})')
+            ax_orig_rd = self._axs[2, col_orig]
+            rd_map_abs_o = data_rd_orig[i_ant]; rd_map_db_o = 20 * np.log10(rd_map_abs_o + 1e-9)
+            vmin_rd_o, vmax_rd_o = np.percentile(rd_map_db_o, [15, 98]) if rd_map_db_o.size > 0 else (-80, -20) 
+            if vmin_rd_o == vmax_rd_o: vmax_rd_o = vmin_rd_o + 10
+            rd_img_o = ax_orig_rd.imshow(rd_map_db_o, aspect='auto', cmap='jet', origin='lower', vmin=vmin_rd_o, vmax=vmax_rd_o, extent=[dist_start, dist_end, vel_start, vel_end])
+            self._range_doppler_plots_orig.append(rd_img_o)
+            rd_cb_o = self._fig.colorbar(rd_img_o, ax=ax_orig_rd, label='Mag (dB)'); self._range_doppler_colorbars_orig.append(rd_cb_o)
+            ax_orig_rd.set_xlabel("Distance (m)"); ax_orig_rd.set_ylabel("Velocity (m/s)")
+            ax_orig_rd.set_title(f"Ant {i_ant} - Original R-D")
 
-# Plot 2: Range-FFT
-img_range_fft = axs[1].imshow(np.zeros((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP)), cmap='viridis', aspect='auto', extent=[-NUM_SAMPLES_PER_CHIRP // 2, NUM_SAMPLES_PER_CHIRP // 2, 0, NUM_CHIRPS_PER_FRAME])
-cb_range_fft = plt.colorbar(img_range_fft, ax=axs[1], label='Magnitude (dB)')
-axs[1].set_xlabel('Range Bin (Shifted)'); axs[1].set_ylabel('Chirp Index'); axs[1].set_title(f'Range-FFT (RX Antenna {ANTENNA_INDEX_TO_DISPLAY + 1})')
+            ax_filt_rd = self._axs[2, col_filt]
+            rd_map_abs_f = data_rd_filt[i_ant]; rd_map_db_f = 20 * np.log10(rd_map_abs_f + FILTERING_FLOOR_2D_MAG_LINEAR)
+            vmin_rd_f, vmax_rd_f = np.percentile(rd_map_db_f, [15, 99]) if rd_map_db_f.size > 0 else (-90, -30)
+            if vmin_rd_f == vmax_rd_f: vmax_rd_f = vmin_rd_f + 10
+            rd_img_f = ax_filt_rd.imshow(rd_map_db_f, aspect='auto', cmap='jet', origin='lower', vmin=vmin_rd_f, vmax=vmax_rd_f, extent=[dist_start, dist_end, vel_start, vel_end])
+            self._range_doppler_plots_filt.append(rd_img_f)
+            rd_cb_f = self._fig.colorbar(rd_img_f, ax=ax_filt_rd, label='Filt. Mag (dB)'); self._range_doppler_colorbars_filt.append(rd_cb_f)
+            ax_filt_rd.set_xlabel("Distance (m)"); ax_filt_rd.set_ylabel("Velocity (m/s)")
+            ax_filt_rd.set_title(f"Ant {i_ant} - Filtered R-D")
 
-# Plot 3: Range-doppler
-img_doppler_fft = axs[2].imshow(np.zeros((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP)), cmap='viridis', aspect='auto', extent=[0, NUM_SAMPLES_PER_CHIRP, -NUM_CHIRPS_PER_FRAME // 2, NUM_CHIRPS_PER_FRAME // 2])
-cb_doppler_fft = plt.colorbar(img_doppler_fft, ax=axs[2], label='Magnitude (dB)')
-axs[2].set_xlabel('Range Bin'); axs[2].set_ylabel('Doppler Bin'); axs[2].set_title(f'Range-Doppler (RX Antenna {ANTENNA_INDEX_TO_DISPLAY + 1})')
+        self._fig.tight_layout(pad=1.5, h_pad=2.5, w_pad=2.5) 
+        plt.show() 
 
-# Plot 4: Detection status
-axs[3].text(0.1, 0.8, 'Detection Status', fontsize=16, weight='bold'); axs[3].text(0.1, 0.6, 'Use Control Window', fontsize=14)
-axs[3].set_xlim(0, 1); axs[3].set_ylim(0, 1); axs[3].axis('off')
+    def _update_plots(self, data_1d_orig, data_2d_rc_orig, data_rd_orig,
+                      data_1d_filt, data_2d_rc_filt, data_rd_filt):
+        
+        min_y_orig_all, max_y_orig_all = self._get_1d_plot_ylimits(data_1d_orig)
+        min_y_filt_all, max_y_filt_all = self._get_1d_plot_ylimits(data_1d_filt, is_filtered=True)
 
-fig.tight_layout(pad=3.0)
+        for i_ant in range(self._num_ant):
+            col_orig = i_ant * 2
+            col_filt = i_ant * 2 + 1
 
-range_window = np.hanning(NUM_SAMPLES_PER_CHIRP)
-doppler_window = np.hanning(NUM_CHIRPS_PER_FRAME)
+            if i_ant < len(self._line_plots_orig): self._line_plots_orig[i_ant].set_ydata(data_1d_orig[i_ant]); self._axs[0, col_orig].set_ylim(min_y_orig_all, max_y_orig_all)
+            if i_ant < len(self._line_plots_filt): self._line_plots_filt[i_ant].set_ydata(data_1d_filt[i_ant]); self._axs[0, col_filt].set_ylim(min_y_filt_all, max_y_filt_all)
+            
+            if i_ant < len(self._image_plots_rc_orig):
+                data_db_o = 20 * np.log10(data_2d_rc_orig[i_ant] + 1e-9)
+                self._image_plots_rc_orig[i_ant].set_data(data_db_o)
+                vmin_o, vmax_o = np.percentile(data_db_o, [5, 95]) if data_db_o.size > 0 else (-60,0); 
+                self._image_plots_rc_orig[i_ant].set_clim(vmin=vmin_o, vmax=vmax_o if vmin_o != vmax_o else vmin_o +1)
+        
+            if i_ant < len(self._image_plots_rc_filt):
+                data_db_f = 20 * np.log10(data_2d_rc_filt[i_ant] + FILTERING_FLOOR_2D_MAG_LINEAR)
+                self._image_plots_rc_filt[i_ant].set_data(data_db_f)
+                vmin_f, vmax_f = np.percentile(data_db_f, [5, 98]) if data_db_f.size > 0 else (-70, -10); 
+                self._image_plots_rc_filt[i_ant].set_clim(vmin=vmin_f, vmax=vmax_f if vmin_f != vmax_f else vmin_f+10)
+        
+            if i_ant < len(self._range_doppler_plots_orig):
+                rd_db_o = 20 * np.log10(data_rd_orig[i_ant] + 1e-9)
+                self._range_doppler_plots_orig[i_ant].set_data(rd_db_o)
+                vmin_rd_o, vmax_rd_o = np.percentile(rd_db_o, [15, 98]) if rd_db_o.size > 0 else (-80,-20); 
+                self._range_doppler_plots_orig[i_ant].set_clim(vmin=vmin_rd_o, vmax=vmax_rd_o if vmin_rd_o != vmax_rd_o else vmin_rd_o+10)
 
-def parse_frame_data_from_serial():
+            if i_ant < len(self._range_doppler_plots_filt):
+                rd_db_f = 20 * np.log10(data_rd_filt[i_ant] + FILTERING_FLOOR_2D_MAG_LINEAR)
+                self._range_doppler_plots_filt[i_ant].set_data(rd_db_f)
+                vmin_rd_f, vmax_rd_f = np.percentile(rd_db_f, [15, 99]) if rd_db_f.size > 0 else (-90, -30); 
+                self._range_doppler_plots_filt[i_ant].set_clim(vmin=vmin_rd_f, vmax=vmax_rd_f if vmin_rd_f != vmax_rd_f else vmin_rd_f+10)
+
+    def draw(self, data_1d_orig, data_2d_rc_orig, data_rd_orig,
+             data_1d_filt, data_2d_rc_filt, data_rd_filt):
+        if self._is_window_open:
+            if not self._line_plots_orig: 
+                self._draw_first_time(data_1d_orig, data_2d_rc_orig, data_rd_orig,
+                                      data_1d_filt, data_2d_rc_filt, data_rd_filt)
+            else: 
+                self._update_plots(data_1d_orig, data_2d_rc_orig, data_rd_orig,
+                                   data_1d_filt, data_2d_rc_filt, data_rd_filt)
+            
+            self._fig.canvas.draw_idle()  
+            self._fig.canvas.flush_events() 
+
+    def close(self, event=None): 
+        if self.is_open():
+            self._is_window_open = False
+            plt.close(self._fig) 
+            plt.close('all')    
+
+    def is_open(self):
+        return self._is_window_open
+
+# Serial Data Acquisition
+ser = None 
+rx_frame_channels_template = [np.zeros((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP), dtype=np.float32) for _ in range(NUM_RX_ANTENNAS)]
+
+def setup_serial(port, baud_rate):
+    global ser
     try:
-        while plt.fignum_exists(fig.number):
-            line = ser.readline().decode('utf-8', errors='ignore').strip()
-            if not line: return None, None, False
+        ser = serial.Serial(port, baud_rate, timeout=1) 
+        time.sleep(2) 
+        ser.reset_input_buffer() 
+        return True
+    except serial.SerialException as e:
+        return False
+
+def parse_frame_data_from_serial(plot_is_open_flag_func): 
+    global ser 
+    if not ser or not ser.is_open:
+        return None, -1, True 
+    
+    empty_line_counter = 0
+    max_empty_lines = 5 
+
+    while plot_is_open_flag_func(): 
+        try:
+            line_bytes = ser.readline() 
+            if not line_bytes: 
+                empty_line_counter += 1
+                if empty_line_counter > max_empty_lines:
+                    return None, -1, False 
+                time.sleep(0.001) 
+                continue 
+            
+            empty_line_counter = 0 
+            line = line_bytes.decode('utf-8', errors='ignore').strip()
+            
             match = re.match(r"Frame (\d+): \[(.*)\]", line)
             if match:
                 frame_num_str, data_str = match.groups()
                 try:
                     flat_data_1d = np.array([float(x) for x in data_str.split(', ')], dtype=np.float32)
-                except ValueError: continue
+                except ValueError:
+                    continue 
+                
                 if len(flat_data_1d) == EXPECTED_SAMPLES_IN_FLAT_ARRAY:
-                    idx = 0
-                    for c in range(NUM_CHIRPS_PER_FRAME):
-                        for s in range(NUM_SAMPLES_PER_CHIRP):
-                            for r_ant in range(NUM_RX_ANTENNAS):
-                                rx_frame_channels[r_ant][c, s] = flat_data_1d[idx]
-                                idx += 1
-                    return rx_frame_channels[ANTENNA_INDEX_TO_DISPLAY], int(frame_num_str), False
-                else: continue
-        return None, None, True
+                    current_rx_frames = [np.zeros_like(tpl) for tpl in rx_frame_channels_template]
+                    idx = 0; reshape_ok = True
+                    for c_idx in range(NUM_CHIRPS_PER_FRAME):
+                        for s_idx in range(NUM_SAMPLES_PER_CHIRP):
+                            for r_ant_idx in range(NUM_RX_ANTENNAS): 
+                                if idx < len(flat_data_1d):
+                                    current_rx_frames[r_ant_idx][c_idx, s_idx] = flat_data_1d[idx]; idx += 1
+                                else: reshape_ok = False; break 
+                            if not reshape_ok: break
+                        if not reshape_ok: break
+                    
+                    if reshape_ok: return current_rx_frames, int(frame_num_str), False 
+                    continue 
+                continue 
+            continue 
+        
+        except serial.SerialException as se: return None, -1, True 
+        except Exception as e: traceback.print_exc(); return None, -1, True 
+    
+    return None, -1, True
+
+# Main logic
+if __name__ == '__main__':
+    app_state = AppState() 
+    threshold_gui_root = None 
+
+    if not setup_serial(SERIAL_PORT, BAUD_RATE):
+        exit()
+
+    threshold_gui_root = setup_threshold_gui(app_state)
+
+    radar_config = RadarConfig(NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP,
+                               START_FREQUENCY_HZ, END_FREQUENCY_HZ, PROCESSING_FRAMERATE_HZ,
+                               SAMPLE_RATE_HZ, CHIRP_REPETITION_TIME_S)
+    distance_algo = DistanceFFT_Algo(radar_config)
+    max_range_m_calculated = distance_algo.chirpsamples * distance_algo._range_bin_length \
+                             if distance_algo._range_bin_length > 0 else 10.0 
+    
+    plotter = Draw(radar_config, max_range_m_calculated, NUM_RX_ANTENNAS, 
+                   distance_algo._range_bin_length, distance_algo._velocity_axis_mps, app_state)
+
+    frame_delay_s = 1.0 / PROCESSING_FRAMERATE_HZ if PROCESSING_FRAMERATE_HZ > 0 else 0.01 
+    frame_count = 0
+
+    try:
+        while True: 
+            if not plotter.is_open(): 
+                break 
+            
+            if app_state.gui_is_active and threshold_gui_root:
+                try:
+                    threshold_gui_root.update_idletasks() 
+                    threshold_gui_root.update()          
+                except tk.TclError: 
+                    if app_state.gui_is_active: 
+                        app_state.gui_is_active = False
+                    threshold_gui_root = None 
+            elif not app_state.gui_is_active and threshold_gui_root:
+                try:
+                    threshold_gui_root.destroy() 
+                except tk.TclError: pass 
+                threshold_gui_root = None
+
+
+            start_time_frame = time.time()
+            antenna_frames, parsed_frame_num, should_exit = parse_frame_data_from_serial(plotter.is_open)
+
+
+            if should_exit: 
+                break 
+            
+            if antenna_frames is not None: 
+                frame_count += 1
+                
+                all_ant_1d_profiles_orig = []
+                all_ant_2d_fft_abs_orig = []
+                all_ant_rd_maps_orig = []
+                
+                for i_ant in range(NUM_RX_ANTENNAS):
+                    raw_time_data_one_antenna = antenna_frames[i_ant]
+                    dist_peak_m, profile_1d, fft_abs_2d, rd_map_abs_one_ant = \
+                        distance_algo.compute_distance_and_profile(raw_time_data_one_antenna)
+                    
+                    all_ant_1d_profiles_orig.append(profile_1d)
+                    all_ant_2d_fft_abs_orig.append(fft_abs_2d)
+                    all_ant_rd_maps_orig.append(rd_map_abs_one_ant)
+                
+                if app_state.calibration_requested:
+                    app_state.baseline_1d_profiles = [p.copy() for p in all_ant_1d_profiles_orig]
+                    app_state.baseline_2d_fft_abs = [f.copy() for f in all_ant_2d_fft_abs_orig]
+                    app_state.baseline_rd_maps_abs = [r.copy() for r in all_ant_rd_maps_orig]
+                    app_state.filtering_enabled = True
+                    app_state.calibration_requested = False 
+
+                all_ant_1d_profiles_filt = []
+                all_ant_2d_fft_abs_filt = []
+                all_ant_rd_maps_filt = []
+
+                if app_state.filtering_enabled and app_state.baseline_1d_profiles: 
+                    for i_ant in range(NUM_RX_ANTENNAS):
+                        filt_1d = all_ant_1d_profiles_orig[i_ant] - app_state.baseline_1d_profiles[i_ant]
+                        filt_1d[filt_1d < app_state.threshold_1d_profile] = FILTERING_FLOOR_1D_PROFILE_LINEAR
+                        all_ant_1d_profiles_filt.append(filt_1d)
+
+                        filt_2d_rc = all_ant_2d_fft_abs_orig[i_ant] - app_state.baseline_2d_fft_abs[i_ant]
+                        filt_2d_rc[filt_2d_rc < app_state.threshold_2d_mag] = FILTERING_FLOOR_2D_MAG_LINEAR
+                        all_ant_2d_fft_abs_filt.append(filt_2d_rc)
+
+                        filt_rd = all_ant_rd_maps_orig[i_ant] - app_state.baseline_rd_maps_abs[i_ant] 
+                        filt_rd[filt_rd < app_state.threshold_2d_mag] = FILTERING_FLOOR_2D_MAG_LINEAR
+                        all_ant_rd_maps_filt.append(filt_rd)
+                else: 
+                    for i_ant in range(NUM_RX_ANTENNAS):
+                        all_ant_1d_profiles_filt.append(np.zeros_like(all_ant_1d_profiles_orig[i_ant]))
+                        all_ant_2d_fft_abs_filt.append(np.full_like(all_ant_2d_fft_abs_orig[i_ant], FILTERING_FLOOR_2D_MAG_LINEAR))
+                        all_ant_rd_maps_filt.append(np.full_like(all_ant_rd_maps_orig[i_ant], FILTERING_FLOOR_2D_MAG_LINEAR))   
+
+                if plotter.is_open():
+                    plotter.draw(all_ant_1d_profiles_orig, all_ant_2d_fft_abs_orig, all_ant_rd_maps_orig,
+                                 all_ant_1d_profiles_filt, all_ant_2d_fft_abs_filt, all_ant_rd_maps_filt)
+            
+            elapsed_time_frame = time.time() - start_time_frame
+            sleep_duration = frame_delay_s - elapsed_time_frame
+            if sleep_duration > 0: time.sleep(sleep_duration)
+
+    except KeyboardInterrupt: 
+        print("\nData collection stopped by user (Ctrl+C).")
     except Exception as e:
-        print(f"An error occurred in parse_frame_data_from_serial: {e}")
-        return None, None, False
-
-print("Starting radar with cluster-based motion detection...")
-print("Use the Control Window to calibrate and adjust sensitivity")
-
-try:
-    while True:
-        if not plt.fignum_exists(fig.number):
-            print("Plot window closed. Exiting."); break
-        selected_antenna_frame_data, parsed_frame_num, should_exit = parse_frame_data_from_serial()
-        if should_exit: break
-        if selected_antenna_frame_data is None:
-            plt.pause(0.05); continue
-
-        # Standard processing pipeline...
-        mean_per_chirp = np.mean(selected_antenna_frame_data, axis=1, keepdims=True)
-        data_after_chirp_dc_removal = selected_antenna_frame_data - mean_per_chirp
-        raw_data_to_plot = np.abs(data_after_chirp_dc_removal)
-        img_raw.set_data(raw_data_to_plot)
-        raw_min, raw_max = np.percentile(raw_data_to_plot, [1, 99]); img_raw.set_clim(vmin=raw_min, vmax=raw_max)
-        axs[0].set_title(f'Raw Data (Frame: {parsed_frame_num})')
-
-        windowed_for_range = data_after_chirp_dc_removal * range_window[np.newaxis, :]
-        range_fft_output = np.fft.fft(windowed_for_range, axis=1)
-        range_fft_shifted_for_plot = np.fft.fftshift(range_fft_output, axes=1)
-        range_fft_db = 20 * np.log10(np.abs(range_fft_shifted_for_plot) + 1e-9)
-        img_range_fft.set_data(range_fft_db)
-        rfft_min, rfft_max = np.percentile(range_fft_db, [5, 99]); img_range_fft.set_clim(vmin=rfft_min, vmax=rfft_max)
-        axs[1].set_title(f'Range-FFT (Frame: {parsed_frame_num})')
-
-        mean_per_range_bin = np.mean(range_fft_output, axis=0, keepdims=True)
-        range_fft_dc_removed_for_doppler = range_fft_output - mean_per_range_bin
-        windowed_for_doppler = range_fft_dc_removed_for_doppler * doppler_window[:, np.newaxis]
-        doppler_fft_output = np.fft.fft(windowed_for_doppler, axis=0)
-        doppler_fft_shifted_for_plot = np.fft.fftshift(doppler_fft_output, axes=0)
-        spectrogram_db = 20 * np.log10(np.abs(doppler_fft_shifted_for_plot) + 1e-9)
-        img_doppler_fft.set_data(spectrogram_db)
-        s_min, s_max = np.percentile(spectrogram_db, [5, 99]); img_doppler_fft.set_clim(vmin=s_min, vmax=s_max)
-        axs[2].set_title(f'Range-Doppler (Frame: {parsed_frame_num})')
-
-        if calibration.is_calibrating:
-            if calibration.calibrate_with_current_frame(range_fft_db, spectrogram_db):
-                control_gui.update_info()
-
-        presence, presence_score = calibration.detect_presence(range_fft_db)
-        motion_level, motion = calibration.detect_motion(spectrogram_db)
-        control_gui.update_status(presence, motion, motion_level)
-
-        axs[3].clear()
-        axs[3].text(0.1, 0.9, 'Cluster-Based Detection', fontsize=16, weight='bold')
-        axs[3].text(0.1, 0.7, f"Presence: {'YES' if presence else 'NO'}", fontsize=12, color='green' if presence else 'red')
-        axs[3].text(0.1, 0.6, f"Motion: {'YES' if motion else 'NO'}", fontsize=12, color='orange' if motion else 'blue')
-        axs[3].text(0.1, 0.5, f"Largest Cluster Size: {motion_level:.0f} pixels", fontsize=12)
+        traceback.print_exc()
+    finally:
+        if plotter.is_open(): plotter.close() 
         
-        status = "LIGHTS_ON" if presence and motion else "KEEP_CURRENT" if presence and not motion else "LIGHTS_OFF"
-        axs[3].text(0.1, 0.4, f"Status: {status}", fontsize=12, weight='bold', color='green' if status=='LIGHTS_ON' else 'red' if status=='LIGHTS_OFF' else 'blue')
-        
-        cal_status = "Calibrating..." if calibration.is_calibrating else "Calibrated" if calibration.range_baseline is not None else "Not Calibrated"
-        axs[3].text(0.1, 0.3, f"Calibration: {cal_status}", fontsize=12)
-        axs[3].set_xlim(0, 1); axs[3].set_ylim(0, 1); axs[3].axis('off')
+        if threshold_gui_root: 
+            try:
+                if threshold_gui_root.winfo_exists(): 
+                    threshold_gui_root.destroy()
+            except tk.TclError:
+                pass 
+            app_state.gui_is_active = False 
 
-        plt.draw()
-        plt.pause(0.01)
-
-except KeyboardInterrupt:
-    print("Program stopped (Ctrl+C).")
-finally:
-    if ser and ser.is_open:
-        ser.close()
-        print("Serial port closed.")
-    plt.ioff()
-    if plt.fignum_exists(fig.number):
-        print("Close plot window to exit.")
-        plt.show(block=True)
-    print("Program done.")
+        if ser and ser.is_open: ser.close()
+        print("Program finished.")
