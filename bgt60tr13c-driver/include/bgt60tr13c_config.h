@@ -2,19 +2,19 @@
 #define BGT60TR13C_CONFIG_H
 
 /* DO NOT CHANGE */
-#define XENSIV_BGT60TR13C_CONF_NUM_RX_ANTENNAS (3) // Or 3, depending on your actual setup, though Case #1 uses 3 RX.
+#define XENSIV_BGT60TR13C_CONF_NUM_RX_ANTENNAS (1) // Back to 3 RX
 #define XENSIV_BGT60TR13C_CONF_NUM_TX_ANTENNAS (1)
 
-/* Set for long-range radar settings based on Datasheet Case #1, Shape 2 */
-#define XENSIV_BGT60TR13C_CONF_START_FREQ_HZ (60000000000ULL)    // 60 GHz start frequency [cite: 670]
-#define XENSIV_BGT60TR13C_CONF_BANDWIDTH_HZ (2000000000ULL)      // 2 GHz bandwidth [cite: 670]
+/* Set for long-range radar settings - REVERTED to 256 samples, 16 chirps, 3 RX */
+#define XENSIV_BGT60TR13C_CONF_START_FREQ_HZ (60000000000ULL)    // 60 GHz start frequency
+#define XENSIV_BGT60TR13C_CONF_BANDWIDTH_HZ (2000000000ULL)      // 2 GHz bandwidth
 #define XENSIV_BGT60TR13C_CONF_END_FREQ_HZ (XENSIV_BGT60TR13C_CONF_START_FREQ_HZ + XENSIV_BGT60TR13C_CONF_BANDWIDTH_HZ) // 62 GHz
-#define XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP (256)      // APU = 256 samples [cite: 670]
-#define XENSIV_BGT60TR13C_CONF_NUM_CHIRPS_PER_FRAME (16)        // REPS = 4 => 2^4 = 16 chirps [cite: 326, 666]
-#define XENSIV_BGT60TR13C_CONF_SAMPLE_RATE_HZ (2000000)           // ADC_DIV = 40 => 80MHz/40 = 2MSps [cite: 665]
+#define XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP (256)      // Reverted
+#define XENSIV_BGT60TR13C_CONF_NUM_CHIRPS_PER_FRAME (16)        // Reverted
+#define XENSIV_BGT60TR13C_CONF_SAMPLE_RATE_HZ (2000000)           // 2MSps
 
-// Chirp duration: T_RAMP_UP (133.5us) + T_SED_AFTER_SHAPE (60us from PLL1_7)
-#define XENSIV_BGT60TR13C_CONF_CHIRP_DURATION_S (0.0001335)     // T_RAMP_UP
+// Chirp duration: T_RAMP_UP (133.5us for 256 samples) + T_SED_AFTER_SHAPE (60us from PLL1_7)
+#define XENSIV_BGT60TR13C_CONF_CHIRP_DURATION_S (0.0001335)     // T_RAMP_UP Reverted
 #define XENSIV_BGT60TR13C_CONF_PAUSE_AFTER_CHIRP_S (0.0000600)  // T_SED from PLL1_7
 #define XENSIV_BGT60TR13C_CONF_CHIRP_REPETITION_TIME_S (XENSIV_BGT60TR13C_CONF_CHIRP_DURATION_S + XENSIV_BGT60TR13C_CONF_PAUSE_AFTER_CHIRP_S) // Approx 0.0001935 s
 
@@ -25,12 +25,9 @@
 
 #define XENSIV_BGT60TR13C_CONF_NUM_FRAMES_TO_RUN (8) // MAX_FRAME_CNT from CCR2
 
-// This might need adjustment based on how many entries your generate_new_registers.py script processes
-// from the exported_registers.txt. The provided exported_registers.txt has 27 entries.
-#define XENSIV_BGT60TR13C_CONF_NUM_REGS (27)
+#define XENSIV_BGT60TR13C_CONF_NUM_REGS (27) // Number of entries in exported_registers.txt
 
-/* Added this */
-#define XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE (XENSIV_BGT60TR13C_CONF_NUM_SAMPLES_PER_CHIRP / 2) // Example: interrupt when half chirp data is ready (FIFO words)
+#define XENSIV_BGT60TR13C_IRQ_TRIGGER_FRAME_SIZE (2048)
 
 const uint32_t radar_init_register_list[] = { 
 	0x001E74E0,

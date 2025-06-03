@@ -1,0 +1,131 @@
+{
+    "auto_calibration_enabled": true,
+    "auto_calibration_interval_s": 45.0,
+    "motion_pixel_magnitude_thresholds": {
+        "0.0-0.5m": 0.01,
+        "0.5-1.0m": 0.01,
+        "1.0-2.0m": 0.01,
+        "2.0-3.0m": 0.001,
+        "3.0-4.0m": 0.0001,
+        "4.0-5.0m": 0.0001,
+        "5.0-6.0m": 0.0001,
+        "6.0-7.0m": 0.0001,
+        "7.0-8.0m": 0.0001,
+        "8.0m+": 0.01
+    },
+    "motion_pixel_count_thresholds": {
+        "0.0-0.5m": 5,
+        "0.5-1.0m": 5,
+        "1.0-2.0m": 3,
+        "2.0-3.0m": 2,
+        "3.0-4.0m": 1,
+        "4.0-5.0m": 1,
+        "5.0-6.0m": 1,
+        "6.0-7.0m": 1,
+        "7.0-8.0m": 1,
+        "8.0m+": 10
+    },
+    "motion_consecutive_frames_thresholds": {
+        "0.0-0.5m": 3,
+        "0.5-1.0m": 3,
+        "1.0-2.0m": 3,
+        "2.0-3.0m": 2,
+        "3.0-4.0m": 1,
+        "4.0-5.0m": 1,
+        "5.0-6.0m": 1,
+        "6.0-7.0m": 1,
+        "7.0-8.0m": 1,
+        "8.0m+": 1
+    },
+    "motion_hold_time_s": 10.0,
+    "motion_allowed_gaps": 5,
+    "per_antenna_range_thresholds_1d": [
+        {
+            "0.0-0.5m": 800.07,
+            "0.5-1.0m": 600.05,
+            "1.0-2.0m": 400.05,
+            "2.0-3.0m": 300.03,
+            "3.0-4.0m": 200.03,
+            "4.0-5.0m": 200.02,
+            "5.0-6.0m": 120.02,
+            "6.0-7.0m": 80.015,
+            "7.0-8.0m": 0.015,
+            "8.0m+": 0.01
+        },
+        {
+            "0.0-0.5m": 0.07,
+            "0.5-1.0m": 0.05,
+            "1.0-2.0m": 0.05,
+            "2.0-3.0m": 0.03,
+            "3.0-4.0m": 0.03,
+            "4.0-5.0m": 0.02,
+            "5.0-6.0m": 0.02,
+            "6.0-7.0m": 0.015,
+            "7.0-8.0m": 0.015,
+            "8.0m+": 0.01
+        },
+        {
+            "0.0-0.5m": 0.07,
+            "0.5-1.0m": 0.05,
+            "1.0-2.0m": 0.05,
+            "2.0-3.0m": 0.03,
+            "3.0-4.0m": 0.03,
+            "4.0-5.0m": 0.02,
+            "5.0-6.0m": 0.02,
+            "6.0-7.0m": 0.015,
+            "7.0-8.0m": 0.015,
+            "8.0m+": 0.01
+        }
+    ],
+    "per_antenna_range_thresholds_2d": [
+        {
+            "0.0-0.5m": 9200.0,
+            "0.5-1.0m": 5200.0,
+            "1.0-2.0m": 4300.0,
+            "2.0-3.0m": 3800.0,
+            "3.0-4.0m": 3000.0,
+            "4.0-5.0m": 2200.0,
+            "5.0-6.0m": 1800.0,
+            "6.0-7.0m": 1200.0,
+            "7.0-8.0m": 900.0,
+            "8.0m+": 600.0
+        },
+        {
+            "0.0-0.5m": 0.007,
+            "0.5-1.0m": 0.005,
+            "1.0-2.0m": 0.005,
+            "2.0-3.0m": 0.003,
+            "3.0-4.0m": 0.003,
+            "4.0-5.0m": 0.002,
+            "5.0-6.0m": 0.002,
+            "6.0-7.0m": 0.0015,
+            "7.0-8.0m": 0.0015,
+            "8.0m+": 0.001
+        },
+        {
+            "0.0-0.5m": 0.007,
+            "0.5-1.0m": 0.005,
+            "1.0-2.0m": 0.005,
+            "2.0-3.0m": 0.003,
+            "3.0-4.0m": 0.003,
+            "4.0-5.0m": 0.002,
+            "5.0-6.0m": 0.002,
+            "6.0-7.0m": 0.0015,
+            "7.0-8.0m": 0.0015,
+            "8.0m+": 0.001
+        }
+    ],
+    "home_assistant_enabled": true,
+    "home_assistant_url": "http://homeassistant.local:8123",
+    "home_assistant_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiIxMTM1MjEzZjkxYzI0MzI2Yjg4YTBmYTQ3NGJkYTdjYyIsImlhdCI6MTc0ODc0Njg4MCwiZXhwIjoyMDY0MTA2ODgwfQ.dO68DBHdzv29IMAKemkJeo0T4F67IaH9oA1tm7MF92I",
+    "home_assistant_light_entity_id": "light.smart_multicolor_bulb",
+    "sustained_presence_enabled": true,
+    "sustained_min_hot_pixels_for_group": 2,
+    "sustained_pixel_proximity_threshold": 8,
+    "sustained_duration_threshold_s": 10.0,
+    "sustained_magnification_factor": 3.0,
+    "sustained_max_gap_frames": 6,
+    "penalize_new_clusters_enabled": true,
+    "penalize_frames_duration": 1,
+    "penalize_reduction_factor": 0.2
+}
