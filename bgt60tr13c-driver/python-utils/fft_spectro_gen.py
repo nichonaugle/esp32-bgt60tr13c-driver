@@ -59,10 +59,6 @@ print(f"Calculated Max Unambiguous Velocity: +/- {V_MAX_MPS:.2f} m/s")
 RANGE_FFT_LEN = N_SAMPLES_PER_CHIRP * 4
 DOPPLER_FFT_LEN = M_CHIRPS * 4
 
-# --- Helper Functions ---
-# (compute_beat_frequency and compute_phase_difference_per_chirp are for simulation,
-#  not strictly needed for real data processing unless for verification/overlay)
-
 # --- Data Acquisition and Parsing ---
 ser = None
 def connect_serial():
@@ -172,14 +168,14 @@ try:
             range_window = signal.windows.blackman(N_SAMPLES_PER_CHIRP)
             cpi_data_windowed_range = cpi_data_matrix * range_window[np.newaxis, :]
 
-            doppler_window = signal.windows.blackman(M_CHIRPS) # Use all M_CHIRPS
+            doppler_window = signal.windows.blackman(M_CHIRPS)
             cpi_data_windowed_both = cpi_data_windowed_range * doppler_window[:, np.newaxis]
 
             # --- Range-Doppler FFT Processing ---
-            # 1. Range FFT (on all M_CHIRPS)
+            # 1. Range FFT
             range_fft_result = fft(cpi_data_windowed_both, n=RANGE_FFT_LEN, axis=1)
             
-            # 2. Doppler FFT (on all M_CHIRPS)
+            # 2. Doppler FFT
             range_doppler_fft_result = fft(range_fft_result, n=DOPPLER_FFT_LEN, axis=0)
             
             range_doppler_spectrum_shifted = fftshift(range_doppler_fft_result, axes=(0,1))
