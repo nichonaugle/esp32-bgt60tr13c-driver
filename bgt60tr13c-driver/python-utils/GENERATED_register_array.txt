@@ -20,7 +20,7 @@ const uint32_t radar_init_register_list[] = {
 	0x68000000,
 	0x6A000000,
 	0x6C010000,
-	0x6E14B314,
+	0x6E2CE314,
 	0x7E000100,
 	0x8E000100,
 	0x9E000100,
