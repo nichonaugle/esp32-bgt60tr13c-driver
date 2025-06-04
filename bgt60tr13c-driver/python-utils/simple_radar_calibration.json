@@ -1,0 +1,7 @@
+{
+  "range_baseline": 60.68944842418828,
+  "doppler_baseline": 53.24143376823679,
+  "range_sensitivity": 1.0,
+  "motion_sensitivity": 3.0,
+  "min_cluster_size": 4
+}

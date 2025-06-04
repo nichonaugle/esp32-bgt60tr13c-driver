@@ -10,6 +10,7 @@ from tkinter import ttk, messagebox
 import json
 import os
 from scipy.ndimage import label
+import requests # Added for Home Assistant
 
 # --- Radar Configuration (UPDATED from "new" config) ---
 NUM_CHIRPS_PER_FRAME = 16
@@ -30,6 +31,44 @@ CHIRP_REPETITION_TIME_S = 0.0001935
 TARGET_PLOT_FPS = 15  # Target FPS for plot updates
 PLOT_UPDATE_INTERVAL_S = 1.0 / TARGET_PLOT_FPS
 
+# --- Home Assistant Configuration ---
+HA_CONFIG_FILE = 'radar_config.json'
+ha_config = {
+    "home_assistant_enabled": False,
+    "home_assistant_url": "http://homeassistant.local:8123",
+    "home_assistant_token": "",
+    "home_assistant_light_entity_id": "light.your_light",
+    "motion_hold_time_s": 10.0 # This will be used as light_hold_time_s
+}
+
+def load_ha_config():
+    global ha_config
+    if os.path.exists(HA_CONFIG_FILE):
+        try:
+            with open(HA_CONFIG_FILE, 'r') as f:
+                loaded_config = json.load(f)
+                # Merge with defaults to ensure all keys are present
+                for key in ha_config:
+                    if key in loaded_config:
+                        ha_config[key] = loaded_config[key]
+                print("Home Assistant config loaded from radar_config.json")
+        except Exception as e:
+            print(f"Error loading radar_config.json: {e}. Using default HA config.")
+    else:
+        print_once(f"Warning: {HA_CONFIG_FILE} not found. Using default HA config and trying to save it.")
+        save_ha_config() # Save a default if it doesn't exist
+
+def save_ha_config():
+    global ha_config
+    try:
+        with open(HA_CONFIG_FILE, 'w') as f:
+            json.dump(ha_config, f, indent=4)
+        print(f"Home Assistant config saved to {HA_CONFIG_FILE}")
+    except Exception as e:
+        print(f"Error saving {HA_CONFIG_FILE}: {e}")
+
+load_ha_config()
+
 # --- Helper function for unique prints (to avoid console spam) ---
 _printed_warnings = set()
 def print_once(message):
@@ -40,7 +79,12 @@ def print_once(message):
 # --- FFT Spectrum function ---
 def fft_spectrum_for_range_plot(data_matrix, window_vector):
     if data_matrix.shape[1] == 0 or window_vector.size == 0:
-        return np.zeros_like(data_matrix)
+        # If window vector is empty but data is not, apply no window (rectangular)
+        if data_matrix.shape[1] > 0 and window_vector.size == 0 :
+             window_vector_2d = np.ones((1,data_matrix.shape[1]))
+        else:
+            return np.zeros_like(data_matrix)
+
 
     window_vector_2d = window_vector.reshape(1, -1) if window_vector.ndim == 1 else window_vector
 
@@ -56,6 +100,24 @@ def fft_spectrum_for_range_plot(data_matrix, window_vector):
     complex_fft_result = np.fft.fft(windowed_data, n=fft_processing_length, axis=1)
     return complex_fft_result[:, :fft_output_length] # Return first N bins (positive frequencies)
 
+# NEW: Windowing functions
+WINDOW_FUNCTIONS = ["Hanning", "Hamming", "Blackman", "Bartlett", "Rectangular"]
+
+def get_window_array(window_name, num_points):
+    if num_points <= 0: return np.array([])
+    if window_name == "Hanning":
+        return np.hanning(num_points)
+    elif window_name == "Hamming":
+        return np.hamming(num_points)
+    elif window_name == "Blackman":
+        return np.blackman(num_points)
+    elif window_name == "Bartlett":
+        return np.bartlett(num_points)
+    elif window_name == "Rectangular":
+        return np.ones(num_points)
+    else: # Default to Hanning if name is unknown
+        print_once(f"Warning: Unknown window name '{window_name}'. Defaulting to Hanning.")
+        return np.hanning(num_points)
 
 class SimpleCalibration:
     def __init__(self):
@@ -161,22 +223,40 @@ calibration = SimpleCalibration()
 class CalibrationControl:
     def __init__(self):
         self.window = tk.Toplevel()
-        self.window.title("Calibration Control")
-        self.window.geometry("400x550")
+        self.window.title("Calibration & HA Control")
+        self.window.geometry("450x850") # MODIFIED: Increased height for windowing controls
         self.window.attributes('-topmost', True)
         self.presence_var = tk.StringVar(value="NO")
         self.motion_var = tk.StringVar(value="NO")
         self.motion_level_var = tk.StringVar(value="0.0")
         self.latest_presence = False; self.latest_motion = False; self.latest_motion_level = 0.0
+        
+        # HA GUI Vars
+        self.ha_enabled_var = tk.BooleanVar(value=ha_config.get("home_assistant_enabled", False))
+        self.ha_url_var = tk.StringVar(value=ha_config.get("home_assistant_url", ""))
+        self.ha_token_var = tk.StringVar(value=ha_config.get("home_assistant_token", ""))
+        self.ha_entity_id_var = tk.StringVar(value=ha_config.get("home_assistant_light_entity_id", ""))
+        self.light_hold_time_var = tk.DoubleVar(value=ha_config.get("motion_hold_time_s", 10.0))
+
+        # NEW: Windowing GUI Vars
+        self.range_window_type_var = tk.StringVar(value="Hanning")
+        self.doppler_window_type_var = tk.StringVar(value="Hanning")
+
+
         self.setup_gui(); self.fast_update_gui()
+
     def setup_gui(self):
         main_frame=ttk.Frame(self.window);main_frame.pack(fill='both',expand=True,padx=10,pady=10)
-        cal_frame=ttk.LabelFrame(main_frame,text="Calibration");cal_frame.pack(fill='x',pady=(0,10))
+        
+        # Calibration Frame
+        cal_frame=ttk.LabelFrame(main_frame,text="Radar Calibration");cal_frame.pack(fill='x',pady=(0,10))
         btn_frame=ttk.Frame(cal_frame);btn_frame.pack(fill='x',padx=5,pady=5)
         ttk.Button(btn_frame,text="Start Calibration",command=self.start_calibration).pack(side='left',padx=(0,5))
-        ttk.Button(btn_frame,text="Save",command=self.save_calibration).pack(side='left',padx=(0,5))
-        ttk.Button(btn_frame,text="Load",command=self.load_calibration).pack(side='left')
+        ttk.Button(btn_frame,text="Save Cal",command=self.save_calibration).pack(side='left',padx=(0,5))
+        ttk.Button(btn_frame,text="Load Cal",command=self.load_calibration).pack(side='left')
         self.cal_status=ttk.Label(cal_frame,text="Ready to calibrate");self.cal_status.pack(pady=5)
+        
+        # Detection Status Frame
         stat_frame=ttk.LabelFrame(main_frame,text="Detection Status");stat_frame.pack(fill='x',pady=(0,10))
         ttk.Label(stat_frame,text="Presence:").grid(row=0,column=0,sticky='w',padx=5,pady=2)
         ttk.Label(stat_frame,textvariable=self.presence_var,font=('Arial',10,'bold')).grid(row=0,column=1,sticky='w',padx=5,pady=2)
@@ -184,7 +264,9 @@ class CalibrationControl:
         ttk.Label(stat_frame,textvariable=self.motion_var,font=('Arial',10,'bold')).grid(row=1,column=1,sticky='w',padx=5,pady=2)
         ttk.Label(stat_frame,text="Largest Cluster:").grid(row=2,column=0,sticky='w',padx=5,pady=2)
         ttk.Label(stat_frame,textvariable=self.motion_level_var).grid(row=2,column=1,sticky='w',padx=5,pady=2)
-        sens_frame=ttk.LabelFrame(main_frame,text="Sensitivity");sens_frame.pack(fill='x',pady=(0,10))
+        
+        # Sensitivity Frame
+        sens_frame=ttk.LabelFrame(main_frame,text="Radar Sensitivity");sens_frame.pack(fill='x',pady=(0,10))
         ttk.Label(sens_frame,text="Presence Sensitivity (dB):").pack(anchor='w',padx=5,pady=(5,0))
         self.range_var=tk.DoubleVar(value=calibration.range_sensitivity)
         ttk.Spinbox(sens_frame,from_=1.0,to=30.0,increment=0.1,textvariable=self.range_var,command=self.update_sensitivities,width=8).pack(anchor='w',padx=5,pady=2)
@@ -197,24 +279,79 @@ class CalibrationControl:
         self.cluster_size_var=tk.IntVar(value=calibration.min_cluster_size)
         ttk.Spinbox(sens_frame,from_=1,to=100,increment=1,textvariable=self.cluster_size_var,command=self.update_sensitivities,width=8).pack(anchor='w',padx=5,pady=2)
         self.cluster_size_var.trace_add('write',self.update_sensitivities)
+
+        # NEW: Windowing Control Frame
+        win_frame = ttk.LabelFrame(main_frame, text="FFT Windowing Control")
+        win_frame.pack(fill='x', pady=(0, 10))
+        ttk.Label(win_frame, text="Range FFT Window:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        range_win_combo = ttk.Combobox(win_frame, textvariable=self.range_window_type_var, values=WINDOW_FUNCTIONS, state="readonly", width=15)
+        range_win_combo.grid(row=0, column=1, sticky='w', padx=5, pady=2)
+        range_win_combo.bind("<<ComboboxSelected>>", self.update_window_settings)
+
+        ttk.Label(win_frame, text="Doppler FFT Window:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        doppler_win_combo = ttk.Combobox(win_frame, textvariable=self.doppler_window_type_var, values=WINDOW_FUNCTIONS, state="readonly", width=15)
+        doppler_win_combo.grid(row=1, column=1, sticky='w', padx=5, pady=2)
+        doppler_win_combo.bind("<<ComboboxSelected>>", self.update_window_settings)
+
+
+        # Home Assistant Frame
+        ha_frame = ttk.LabelFrame(main_frame, text="Home Assistant Control")
+        ha_frame.pack(fill='x', pady=(0, 10))
+        ttk.Checkbutton(ha_frame, text="Enable Home Assistant", variable=self.ha_enabled_var, command=self.update_ha_config_from_gui).grid(row=0, column=0, columnspan=2, sticky='w', padx=5, pady=5)
+        ttk.Label(ha_frame, text="HA URL:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(ha_frame, textvariable=self.ha_url_var, width=40).grid(row=1, column=1, sticky='ew', padx=5, pady=2)
+        ttk.Label(ha_frame, text="HA Token:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(ha_frame, textvariable=self.ha_token_var, width=40, show="*").grid(row=2, column=1, sticky='ew', padx=5, pady=2)
+        ttk.Label(ha_frame, text="Light Entity ID:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
+        ttk.Entry(ha_frame, textvariable=self.ha_entity_id_var, width=40).grid(row=3, column=1, sticky='ew', padx=5, pady=2)
+        ttk.Label(ha_frame, text="Light Hold Time (s):").grid(row=4, column=0, sticky='w', padx=5, pady=2)
+        ttk.Spinbox(ha_frame, from_=0.0, to=300.0, increment=1.0, textvariable=self.light_hold_time_var, command=self.update_ha_config_from_gui, width=8).grid(row=4, column=1, sticky='w', padx=5, pady=2)
+        
+        ttk.Button(ha_frame, text="Save HA Config", command=self.save_ha_config_action).grid(row=5, column=0, columnspan=2, pady=5)
+        
+        # Info Frame
         info_frame=ttk.LabelFrame(main_frame,text="Info");info_frame.pack(fill='both',expand=True)
-        self.info_text=tk.Text(info_frame,height=8,wrap=tk.WORD);self.info_text.pack(fill='both',expand=True,padx=5,pady=5)
+        self.info_text=tk.Text(info_frame,height=10,wrap=tk.WORD);self.info_text.pack(fill='both',expand=True,padx=5,pady=5) # MODIFIED: Increased height
         self.update_info()
+
+    def update_ha_config_from_gui(self, *args):
+        global ha_config
+        ha_config["home_assistant_enabled"] = self.ha_enabled_var.get()
+        ha_config["home_assistant_url"] = self.ha_url_var.get()
+        ha_config["home_assistant_token"] = self.ha_token_var.get()
+        ha_config["home_assistant_light_entity_id"] = self.ha_entity_id_var.get()
+        ha_config["motion_hold_time_s"] = self.light_hold_time_var.get() # GUI uses light_hold_time_var
+        self.update_info()
+
+    def save_ha_config_action(self):
+        self.update_ha_config_from_gui() # Ensure current GUI values are in ha_config
+        save_ha_config()
+        messagebox.showinfo("Save", "Home Assistant configuration saved!")
+
     def update_sensitivities(self,*args):
         try:
             calibration.range_sensitivity=self.range_var.get()
             calibration.motion_sensitivity=self.motion_sens_var.get()
             calibration.min_cluster_size=self.cluster_size_var.get()
             self.update_info()
-        except(tk.TclError,ValueError):pass 
+        except(tk.TclError,ValueError):pass
+    
+    # NEW: Callback for window selection change
+    def update_window_settings(self, *args):
+        print_once(f"Range window set to: {self.range_window_type_var.get()}")
+        print_once(f"Doppler window set to: {self.doppler_window_type_var.get()}")
+        self.update_info() # Update info panel to reflect changes
+
     def start_calibration(self):calibration.start_calibration();self.cal_status.config(text="Calibrating EMPTY ROOM with next frame...")
-    def save_calibration(self):calibration.save_calibration();messagebox.showinfo("Save","Calibration saved!")
+    def save_calibration(self):calibration.save_calibration();messagebox.showinfo("Save","Radar calibration saved!")
     def load_calibration(self):
         if calibration.load_calibration():
             self.range_var.set(calibration.range_sensitivity);self.motion_sens_var.set(calibration.motion_sensitivity)
-            self.cluster_size_var.set(calibration.min_cluster_size);self.update_info();messagebox.showinfo("Load","Calibration loaded!")
-        else:messagebox.showerror("Load","Failed to load!")
+            self.cluster_size_var.set(calibration.min_cluster_size);self.update_info();messagebox.showinfo("Load","Radar calibration loaded!")
+        else:messagebox.showerror("Load","Failed to load radar calibration!")
+
     def update_status(self,presence,motion,motion_level):self.latest_presence=presence;self.latest_motion=motion;self.latest_motion_level=motion_level
+    
     def fast_update_gui(self): 
         self.presence_var.set("YES" if self.latest_presence else"NO");self.motion_var.set("YES" if self.latest_motion else"NO")
         self.motion_level_var.set(f"{self.latest_motion_level:.0f}")
@@ -222,25 +359,62 @@ class CalibrationControl:
         elif calibration.range_baseline is not None:self.cal_status.config(text="✓ Calibrated (Empty Room)")
         else:self.cal_status.config(text="Not calibrated")
         if self.window.winfo_exists():self.window.after(100,self.fast_update_gui) 
+
     def update_info(self):
-        info="Calibration Status:\n\n"
+        info="Calibration Status:\n"
         if calibration.range_baseline is not None:
             info+=f"✓ Empty room range baseline: {calibration.range_baseline:.1f} dB\n"
             info+=f"✓ Empty room doppler baseline: {calibration.doppler_baseline:.1f} dB\n\n"
-            info+="Settings:\n";info+=f"• Presence sensitivity: {calibration.range_sensitivity:.1f} dB\n"
+            info+="Radar Settings:\n";info+=f"• Presence sensitivity: {calibration.range_sensitivity:.1f} dB\n"
             info+=f"• Motion energy threshold: {calibration.motion_sensitivity:.1f} dB\n"
             info+=f"• Min cluster size: {calibration.min_cluster_size} pixels\n\n"
-            info+="Detection logic:\n";info+="• Presence = AVG range energy > baseline\n"
-            info+="• Motion = Find clusters of pixels > energy threshold that are > min cluster size"
         else:
-            info+="✗ Not calibrated\n\n";info+="Instructions:\n1. LEAVE THE ROOM\n2. Click 'Start Calibration'\n3. Come back and adjust sensitivity\n4. Save calibration"
+            info+="✗ Not calibrated\n\n";info+="Instructions:\n1. LEAVE THE ROOM\n2. Click 'Start Calibration'\n3. Come back and adjust sensitivity\n4. Save calibration\n\n"
+        
+        # NEW: Display selected window types in info
+        info += "FFT Windowing:\n"
+        info += f"• Range FFT Window: {self.range_window_type_var.get()}\n"
+        info += f"• Doppler FFT Window: {self.doppler_window_type_var.get()}\n\n"
+
+        info += "Home Assistant Status:\n"
+        info += f"• Enabled: {'YES' if ha_config.get('home_assistant_enabled') else 'NO'}\n"
+        info += f"• URL: {ha_config.get('home_assistant_url')}\n"
+        info += f"• Token: {'Set' if ha_config.get('home_assistant_token') else 'Not Set'}\n"
+        info += f"• Entity ID: {ha_config.get('home_assistant_light_entity_id')}\n"
+        info += f"• Light Hold Time: {ha_config.get('motion_hold_time_s'):.1f}s\n"
+
         self.info_text.delete(1.0,tk.END);self.info_text.insert(1.0,info)
 
 def start_gui():
     control = CalibrationControl()
     return control
 
-control_gui = start_gui()
+# --- Home Assistant Functions ---
+def call_home_assistant_service(service, entity_id):
+    if not ha_config.get("home_assistant_enabled"):
+        return
+    
+    url = f"{ha_config.get('home_assistant_url', '').rstrip('/')}/api/services/light/{service}"
+    headers = {
+        "Authorization": f"Bearer {ha_config.get('home_assistant_token', '')}",
+        "content-type": "application/json",
+    }
+    data = {"entity_id": entity_id}
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=5)
+        response.raise_for_status() # Raise an exception for HTTP errors
+        print_once(f"HA: Called {service} for {entity_id}. Status: {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        print_once(f"HA Error: Could not call {service} for {entity_id}: {e}")
+
+def turn_light_on():
+    call_home_assistant_service("turn_on", ha_config.get("home_assistant_light_entity_id"))
+
+def turn_light_off():
+    call_home_assistant_service("turn_off", ha_config.get("home_assistant_light_entity_id"))
+
+
+control_gui = start_gui() # Initialize GUI first so it can load HA config
 
 ser = None
 try:
@@ -327,9 +501,10 @@ axs[2].set_title(f'Range-Doppler (Ant {ANTENNA_INDEX_TO_DISPLAY + 1})')
 
 fig.tight_layout(pad=2.5) 
 
-# --- Windows for FFT ---
-range_window = np.hanning(NUM_SAMPLES_PER_CHIRP) if NUM_SAMPLES_PER_CHIRP > 0 else np.array([])
-doppler_window = np.hanning(NUM_CHIRPS_PER_FRAME) if NUM_CHIRPS_PER_FRAME > 0 else np.array([])
+# MODIFIED: These global initializations are now just fallbacks or could be removed
+# as the loop will use dynamically generated windows from GUI settings.
+# range_window = np.hanning(NUM_SAMPLES_PER_CHIRP) if NUM_SAMPLES_PER_CHIRP > 0 else np.array([])
+# doppler_window = np.hanning(NUM_CHIRPS_PER_FRAME) if NUM_CHIRPS_PER_FRAME > 0 else np.array([])
 
 def parse_frame_data_from_serial():
     try:
@@ -374,16 +549,19 @@ def parse_frame_data_from_serial():
         return None, None, False 
 
 print("Starting radar with 3 plots (1D Range, Range-Chirp, Range-Doppler)...")
-print("Use the Control Window to calibrate and adjust sensitivity")
+print("Use the Control Window to calibrate and adjust sensitivity / Home Assistant settings.")
 
 last_plot_update_time = time.time() 
+# --- HA Light Control State ---
+light_is_on = False
+last_presence_time = 0.0
 
 try:
     while True:
         current_loop_time = time.time()
 
-        if not plt.fignum_exists(fig.number):
-            print("Plot window closed. Exiting.")
+        if not plt.fignum_exists(fig.number) or (control_gui and not control_gui.window.winfo_exists()):
+            print("Plot or Control window closed. Exiting.")
             break
         
         selected_antenna_frame_data, parsed_frame_num, should_exit = parse_frame_data_from_serial()
@@ -392,28 +570,49 @@ try:
             break
         if selected_antenna_frame_data is None:
             plt.pause(0.01) 
+            # Check for light timeout even if no new radar data
+            if light_is_on and ha_config.get("home_assistant_enabled"):
+                if (current_loop_time - last_presence_time) > ha_config.get("motion_hold_time_s", 10.0):
+                    print_once("HA: Light hold time expired. Turning off.")
+                    turn_light_off()
+                    light_is_on = False
             continue
 
         # --- Data Processing ---
-        # DC removal per chirp
+        # DC removal per chirp (DISABLED)
         # mean_per_chirp = np.mean(selected_antenna_frame_data, axis=1, keepdims=True)
         # data_after_chirp_dc_removal = selected_antenna_frame_data - mean_per_chirp
-        data_after_chirp_dc_removal = selected_antenna_frame_data # MODIFIED: Use raw data
+        data_after_chirp_dc_removal = selected_antenna_frame_data # Using raw data
+
+        # Get current window selections from GUI
+        current_range_window_type = control_gui.range_window_type_var.get() if control_gui else "Hanning"
+        current_doppler_window_type = control_gui.doppler_window_type_var.get() if control_gui else "Hanning"
+
+        # Generate window arrays based on selection
+        active_range_window = get_window_array(current_range_window_type, NUM_SAMPLES_PER_CHIRP)
+        active_doppler_window = get_window_array(current_doppler_window_type, NUM_CHIRPS_PER_FRAME)
+
 
         # Range FFT processing
-        range_fft_complex_one_sided = fft_spectrum_for_range_plot(data_after_chirp_dc_removal, range_window)
+        range_fft_complex_one_sided = fft_spectrum_for_range_plot(data_after_chirp_dc_removal, active_range_window)
         range_plot_data_for_cal_and_plot = 20 * np.log10(np.abs(range_fft_complex_one_sided) + 1e-9)
 
         # 1D Range Profile Data
         one_d_profile_abs = np.mean(np.abs(range_fft_complex_one_sided), axis=0)
         one_d_profile_db = 20 * np.log10(one_d_profile_abs + 1e-9)
 
-        # Doppler Processing: DC removal per range bin
+        # Doppler Processing: DC removal per range bin (DISABLED)
         # mean_per_range_bin = np.mean(range_fft_complex_one_sided, axis=0, keepdims=True)
         # range_fft_dc_removed_for_doppler = range_fft_complex_one_sided - mean_per_range_bin
-        range_fft_dc_removed_for_doppler = range_fft_complex_one_sided # MODIFIED: Use non-DC-removed data for Doppler
+        range_fft_dc_removed_for_doppler = range_fft_complex_one_sided # Using non-DC-removed data for Doppler
+        
+        # MODIFIED: Use active_doppler_window
+        if active_doppler_window.size == range_fft_dc_removed_for_doppler.shape[0]: # Ensure shapes are compatible
+             windowed_for_doppler = range_fft_dc_removed_for_doppler * active_doppler_window[:, np.newaxis]
+        else: # Fallback or error handling if shapes mismatch (e.g. NUM_CHIRPS_PER_FRAME is 0)
+            print_once(f"Warning: Doppler window size mismatch. Using unwindowed for Doppler.")
+            windowed_for_doppler = range_fft_dc_removed_for_doppler
 
-        windowed_for_doppler = range_fft_dc_removed_for_doppler * doppler_window[:, np.newaxis] 
         doppler_fft_output_complex = np.fft.fft(windowed_for_doppler, axis=0) 
         doppler_fft_shifted_for_plot = np.fft.fftshift(doppler_fft_output_complex, axes=0) 
         spectrogram_db = 20 * np.log10(np.abs(doppler_fft_shifted_for_plot) + 1e-9) 
@@ -442,7 +641,7 @@ try:
             # Update Range-Doppler Plot (axs[2])
             img_range_doppler.set_data(spectrogram_db)
             if spectrogram_db.size > 0:
-                s_min, s_max = np.percentile(spectrogram_db, [15, 98])
+                s_min, s_max = np.percentile(spectrogram_db, [15, 98]) # Adjusted percentiles for potentially better contrast
                 img_range_doppler.set_clim(vmin=s_min, vmax=s_max) 
             axs[2].set_title(f'Range-Doppler (Frame: {parsed_frame_num}, Ant {ANTENNA_INDEX_TO_DISPLAY + 1})')
 
@@ -456,8 +655,26 @@ try:
             
             if control_gui and control_gui.window.winfo_exists():
                 control_gui.update_status(presence, motion, motion_level)
-                if not calibration.is_calibrating and calibration.range_baseline is not None:
-                     control_gui.update_info()
+
+
+            # --- Home Assistant Light Control ---
+            if ha_config.get("home_assistant_enabled"):
+                if presence: # Using presence for light trigger as per original logic
+                    if not light_is_on:
+                        print_once("HA: Presence detected. Turning light on.")
+                        turn_light_on()
+                        light_is_on = True
+                    last_presence_time = current_loop_time
+                elif light_is_on:
+                    if (current_loop_time - last_presence_time) > ha_config.get("motion_hold_time_s", 10.0):
+                        print_once("HA: Light hold time expired. Turning off.")
+                        turn_light_off()
+                        light_is_on = False
+            elif light_is_on: # If HA was disabled while light was on
+                print_once("HA: Disabled, turning off light if it was on.")
+                turn_light_off() # Attempt to turn off if it was on
+                light_is_on = False
+
 
             fig.canvas.draw_idle() 
             fig.canvas.flush_events()
@@ -471,7 +688,9 @@ finally:
     plt.ioff() 
     if 'fig' in locals() and hasattr(fig, 'number') and plt.fignum_exists(fig.number):
         print("Close plot window to exit fully.")
-        plt.show(block=True) 
+        plt.show(block=True) # Keep plot open until manually closed
+    
+    # Ensure GUI is closed if it exists
     if control_gui and control_gui.window.winfo_exists():
         control_gui.window.destroy()
     print("Program done.")
