@@ -14,12 +14,12 @@ SERIAL_TIMEOUT_S = 0.1  # Serial read timeout in seconds
 
 # --- Radar & System Parameter Configuration (BGT60TR13C based) ---
 # These should match the configuration in your test.c or radar driver
-F_START_HZ = 60e9  # Start frequency of the chirp (Hz)
+F_START_HZ = 58e9  # Start frequency of the chirp (Hz)
 F_END_HZ = 62e9    # End frequency of the chirp (Hz)
-TC_S = 0.0001935   # Chirp Repetition Time or Effective Chirp Duration (s)
+TC_S = 0.0005911   # Chirp Repetition Time or Effective Chirp Duration (s)
 
-M_CHIRPS = 16      # Number of chirps per frame (NUM_CHIRPS_PER_FRAME in test.c)
-N_SAMPLES_PER_CHIRP = 256 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
+M_CHIRPS = 64      # Number of chirps per frame (NUM_CHIRPS_PER_FRAME in test.c)
+N_SAMPLES_PER_CHIRP = 128 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
 NUM_RX_ANTENNAS = 3 # Number of RX antennas used by the ESP32 (NUM_RX_ANTENNAS in test.c)
 ANTENNA_INDEX_TO_DISPLAY = 0 # 0 for Rx1, 1 for Rx2, 2 for Rx3
 
