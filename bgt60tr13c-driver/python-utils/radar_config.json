@@ -1,9 +1,0 @@
-{
-    "home_assistant_enabled": true,
-    "home_assistant_url": "http://homeassistant.local:8123",
-    "home_assistant_token": "your_long_lived_access_token_here",
-    "home_assistant_light_entity_id": "light.smart_multicolor_bulb",
-    "motion_hold_time_s": 10.0,
-    "auto_calibration_enabled": false,
-    "auto_calibration_interval_s": 300.0
-}
