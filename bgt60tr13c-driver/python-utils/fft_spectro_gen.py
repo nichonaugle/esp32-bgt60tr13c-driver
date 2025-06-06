@@ -8,9 +8,9 @@ from scipy.constants import c
 from numpy.fft import fftshift, fft2
 
 # --- Configuration ---
-NUM_CHIRPS_PER_FRAME = 16
-NUM_SAMPLES_PER_CHIRP = 256
-NUM_RX_ANTENNAS = 3
+NUM_CHIRPS_PER_FRAME = 64
+NUM_SAMPLES_PER_CHIRP = 128
+NUM_RX_ANTENNAS = 1
 BAUD_RATE = 921900
 COM_PORT = '/dev/ttyUSB0'
 
@@ -19,11 +19,11 @@ f_low = 58e9
 f_high = 62e9
 f_bandwidth = abs(f_high-f_low)
 Tc = 0.0001335 # chirp time
-shape_end_delay = 0.00006
-sample_rate = 2e6
+shape_end_delay = 0.0006
+sample_rate = 4e6
 PRT = Tc + shape_end_delay
-samples_per_chirp = 256
-chirps_per_frame = 16
+samples_per_chirp = 128
+chirps_per_frame = 64
 
 r_max = (sample_rate * c * Tc) / (4 * f_bandwidth)
 print(f"Maximum range: {r_max:.3f} m")
@@ -119,7 +119,7 @@ def render_radar_fft(data=None) -> None:
     
 
 def run_radar_engine(serial_connection=None) -> None:
-    time.sleep(0.05)
+    time.sleep(5)
     serial_connection.flushInput()
 
     while True:
