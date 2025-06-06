@@ -1,26 +1,49 @@
 import re
 import numpy as np
-from scipy.signal import windows
-from scipy import constants
 import matplotlib.pyplot as plt
 import serial
 import time
+import matplotlib.pyplot as plt
+from scipy.constants import c
+from numpy.fft import fftshift, fft2
 
 # --- Configuration ---
 NUM_CHIRPS_PER_FRAME = 16
 NUM_SAMPLES_PER_CHIRP = 256
-NUM_RX_ANTENNAS = 1
+NUM_RX_ANTENNAS = 3
 BAUD_RATE = 921900
 COM_PORT = '/dev/ttyUSB0'
 
-START_FREQUENCY_HZ = 60e9
-END_FREQUENCY_HZ = 62e9
-BANDWIDTH_HZ = abs(END_FREQUENCY_HZ - START_FREQUENCY_HZ)
-CHIRP_DURATION_S = 0.0001935
-ADC_SAMPLE_RATE_SPS = 2e6
+# CONSTANTS
+f_low = 58e9
+f_high = 62e9
+f_bandwidth = abs(f_high-f_low)
+Tc = 0.0001335 # chirp time
+shape_end_delay = 0.00006
+sample_rate = 2e6
+PRT = Tc + shape_end_delay
+samples_per_chirp = 256
+chirps_per_frame = 16
+
+r_max = (sample_rate * c * Tc) / (4 * f_bandwidth)
+print(f"Maximum range: {r_max:.3f} m")
+
+# RADAR SPEC DEFINITIONS
+r_res = c / (2 * f_bandwidth)
+print(f"Range resolution: {r_res} m")
+
+v_max =  c / (2 * f_bandwidth * PRT)
+print(f"Maximum velocity: {v_max:.3f} m/s")
+
+v_res = c / (2 * chirps_per_frame * PRT * f_low) # m/s
+print(f"Velocity resolution: {v_res:.3f} m/s\n")
+
+signal_capture_time =  chirps_per_frame * PRT
+print(f"Signal capture time: {(signal_capture_time * 1e3)} ms")
+print(f"Max FPS: {1/signal_capture_time} fps")
 
 # --- Plotting Setup ---
-fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(12, 18))
+fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(12, 18))
 
 line0, = ax0.plot(np.arange((NUM_CHIRPS_PER_FRAME) *NUM_SAMPLES_PER_CHIRP), np.zeros((NUM_CHIRPS_PER_FRAME) *NUM_SAMPLES_PER_CHIRP))
 ax0.set_title("Raw Frame Data from Serial")
@@ -29,38 +52,10 @@ ax0.set_ylabel("Amplitude")
 ax0.set_ylim([0, 4096])
 ax0.grid(True)
 
-range_resolution_m = constants.c / (2 * BANDWIDTH_HZ)
-range_bin_length_m = (constants.c) / (2 * BANDWIDTH_HZ * (NUM_SAMPLES_PER_CHIRP * 2) / NUM_SAMPLES_PER_CHIRP)
-max_range_m = ((NUM_SAMPLES_PER_CHIRP * 2) // 2) * range_bin_length_m # Max range for positive frequencies
-range_bins_m = np.linspace(0, max_range_m, (NUM_SAMPLES_PER_CHIRP * 2) // 2)
-
-img_chirp_range = ax1.imshow(np.zeros((NUM_CHIRPS_PER_FRAME, (NUM_SAMPLES_PER_CHIRP * 2) // 2)), aspect='auto', origin='lower',
-                             cmap='inferno', extent=[range_bins_m.min(), range_bins_m.max(),
-                                                     0, NUM_CHIRPS_PER_FRAME - 1]) # Y-axis from 0 to Chirp-1
-ax1.set_title("Chirp-Range Map (Range FFT per Chirp)")
-ax1.set_xlabel("Range (m)")
-ax1.set_ylabel("Chirp Index")
-plt.colorbar(img_chirp_range, ax=ax1, label='Magnitude (dB)')
-ax1.grid(False)
-
-# --- ax2: Range-Doppler Map Plot ---
-doppler_resolution_hz = 1 / ((NUM_CHIRPS_PER_FRAME) * CHIRP_DURATION_S)
-max_doppler_hz = NUM_CHIRPS_PER_FRAME / 2 * doppler_resolution_hz
-doppler_freqs_hz = np.linspace(-max_doppler_hz, max_doppler_hz, NUM_CHIRPS_PER_FRAME)
-carrier_frequency_hz = (START_FREQUENCY_HZ + END_FREQUENCY_HZ) / 2 # Using center frequency for lambda
-max_velocity_mps = max_doppler_hz * (constants.c / (2 * carrier_frequency_hz))
-velocity_bins_mps = np.linspace(-max_velocity_mps, max_velocity_mps, NUM_CHIRPS_PER_FRAME)
-
-# Initialize the imshow plot. The data will be updated later.
-# The extent argument defines the range of the x and y axes for the image.
-img_display = ax2.imshow(np.zeros((NUM_CHIRPS_PER_FRAME, (NUM_CHIRPS_PER_FRAME * 2) // 2)), aspect='auto', origin='lower',
-                        cmap='viridis', extent=[range_bins_m.min(), range_bins_m.max(),
-                                                velocity_bins_mps.min(), velocity_bins_mps.max()])
-ax2.set_title("Range-Doppler Map")
-ax2.set_xlabel("Range (m)")
-ax2.set_ylabel("Velocity (m/s)")
-plt.colorbar(img_display, ax=ax2, label='Magnitude (dB)')
-ax2.grid(False) # Grid usually not needed for imshow
+ax1.set_ylim([0, r_max])
+ax1.set_title("Range Doppler Spectrum", fontsize=24)
+ax1.set_xlabel("Velocity (m/s)", fontsize=22)
+ax1.set_ylabel("Range (m)", fontsize=22)
 
 plt.tight_layout()
 plt.ion() # Turn on interactive mode
@@ -96,35 +91,28 @@ def render_radar_fft(data=None) -> None:
     fig.canvas.draw()
     fig.canvas.flush_events()
 
-    # Fig 1: Distance Plot (Doppler)
-    range_window = windows.blackmanharris(NUM_SAMPLES_PER_CHIRP).reshape(1, NUM_SAMPLES_PER_CHIRP)
-    # Doppler window: (NUM_CHIRPS_PER_FRAME, 1) to broadcast across chirps dimension (axis=0)
-    doppler_window = windows.hamming(NUM_CHIRPS_PER_FRAME).reshape(NUM_CHIRPS_PER_FRAME, 1)
 
-    # Step 1: Perform Range FFT (along the samples dimension - axis 1)
-    # Output shape: (NUM_CHIRPS_PER_FRAME, RANGE_FFT_SIZE) e.g., (16, 512) or (15, 512)
-    range_fft_output = fft_spectrum(data, range_window, n_fft=(NUM_CHIRPS_PER_FRAME*2), axis=1)
+    ranges = np.linspace(-r_max, r_max, samples_per_chirp * 4)
 
-    # --- Chirp-Range Map Plot ---
-    chirp_range_magnitude = np.abs(range_fft_output)[:, :(NUM_CHIRPS_PER_FRAME*2) // 2]
-    chirp_range_magnitude_db = 20 * np.log10(chirp_range_magnitude + 1e-10)
+    for i in range(chirps_per_frame):
+        demodulated_signal = data[i] - np.mean(data[i])
+        normalized_signal = (demodulated_signal / np.max(np.abs(demodulated_signal)))
+        data[i]=np.hanning(samples_per_chirp) * normalized_signal
 
-    img_chirp_range.set_array(chirp_range_magnitude_db)
-    img_chirp_range.set_clim(np.min(chirp_range_magnitude_db), np.max(chirp_range_magnitude_db))
+    vels = np.linspace(-v_max, v_max, chirps_per_frame)
 
+    range_doppler = fftshift(np.abs(fft2(data.T))) / (samples_per_chirp / 2)
+    print(range_doppler.shape)
+    extent = [-v_max/2, v_max/2, ranges.min(), ranges.max()]
 
-    # Step 2: Perform Doppler FFT (along the chirps dimension - axis 0)
-    doppler_fft_output = fft_spectrum(range_fft_output, doppler_window, n_fft=NUM_CHIRPS_PER_FRAME, axis=0)
-
-    # Step 3: Shift zero-frequency component to center for Doppler dimension (axis 0)
-    range_doppler_map_shifted = np.fft.fftshift(doppler_fft_output, axes=0)
-    plot_map_db = np.abs(range_doppler_map_shifted)[:, :(NUM_CHIRPS_PER_FRAME*2) // 2]
-    range_doppler_plot_data = 10 * np.log10(plot_map_db / (NUM_CHIRPS_PER_FRAME / 2) + 1e-10) # Added +1e-10 for log stability
-
-    img_display.set_array(range_doppler_plot_data)
-    img_display.set_clim(np.min(range_doppler_plot_data), np.max(range_doppler_plot_data))
-    # You can set fixed clim as per your reference:
-    # img_display.set_clim(vmin=-25, vmax=2) # Uncomment to use fixed limits
+    range_doppler_plot = ax1.imshow(
+        10 * np.log10(range_doppler),
+        aspect="auto",
+        extent=extent,
+        origin="lower",
+        vmax=5,#np.max(10 * np.log10(range_doppler)),
+        vmin=-25,#np.min(10 * np.log10(range_doppler)),
+    )
 
     fig.canvas.draw_idle()
     fig.canvas.flush_events()
@@ -140,9 +128,15 @@ def run_radar_engine(serial_connection=None) -> None:
         match = re.match(r"Frame (\d+): \[(.*)\]", line)
         if match:
             _, data_str = match.groups()
-            data = np.array([float(x) for x in data_str.split(', ')], dtype=np.float32)
-            data = data[::3].reshape((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP))
-            render_radar_fft(data=data)
+            try:
+                data = np.array([float(x) for x in data_str.split(', ')], dtype=np.float32)
+                print(data.shape[0])
+                if data.shape[0] == NUM_RX_ANTENNAS * NUM_CHIRPS_PER_FRAME * NUM_SAMPLES_PER_CHIRP:
+                    data = data[::3].reshape((NUM_CHIRPS_PER_FRAME, NUM_SAMPLES_PER_CHIRP))
+                    render_radar_fft(data=data)
+            except:
+                print("Data Corruption, skipping frame...")
+                continue
 
 
 if __name__ == "__main__":
