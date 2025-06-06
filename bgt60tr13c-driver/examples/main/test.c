@@ -9,6 +9,7 @@
 #include "esp_system.h"
 #include "bgt60tr13c_driver.h"
 #include "freertos/semphr.h"
+#include "esp_task_wdt.h"
 
 static const char * TAG = "spi-test-runner";
 
@@ -33,7 +34,7 @@ void IRAM_ATTR gpio_radar_isr_handler(void *arg) {
 
 void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
     ESP_LOGI(TAG, "Radar task started.");
-
+    esp_task_wdt_add(NULL);
     const uint32_t target_frame_size_samples = 128 * 64 * 3;
     const uint32_t raw_buffer_size = target_frame_size_samples * 3 / 2;
 
@@ -105,6 +106,10 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                         // For subsequent pairs, add a leading comma and space for parsing
                         printf(", %u, %u", sample1, sample2);
                     }
+                    if ((i / 3) % 512 == 0) {
+                        vTaskDelay(1); // Yield for at least one tick
+                    }
+                    esp_task_wdt_reset();
                 }
                 printf("]\n");
                 fflush(stdout);
@@ -174,6 +179,6 @@ void app_main(void) {
         frame_trigger_count_main++;
         ESP_LOGI(TAG, "app_main: Triggering frame capture #%d", frame_trigger_count_main);
         xSemaphoreGive(xFrameTriggerSemaphore);
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(15000));
     }
 }
