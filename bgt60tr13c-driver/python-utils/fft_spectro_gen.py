@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm  # Import colormap library
 from scipy import signal # For window functions
 from scipy.constants import c # Speed of light
-from numpy.fft import fft, fftshift # FFT functions (fft2 not strictly needed for 2x1D FFTs)
+from numpy.fft import fft, fftshift # FFT functions
 import serial
 import time
 import re
@@ -14,14 +15,14 @@ SERIAL_TIMEOUT_S = 0.1  # Serial read timeout in seconds
 
 # --- Radar & System Parameter Configuration (BGT60TR13C based) ---
 # These should match the configuration in your test.c or radar driver
-F_START_HZ = 58e9  # Start frequency of the chirp (Hz)
-F_END_HZ = 62e9    # End frequency of the chirp (Hz)
-TC_S = 0.0005911   # Chirp Repetition Time or Effective Chirp Duration (s)
+F_START_HZ = 60e9  # Start frequency of the chirp (Hz)
+F_END_HZ = 62e9  # End frequency of the chirp (Hz)
+TC_S = 0.0001935   # Chirp Repetition Time or Effective Chirp Duration (s)
 
-M_CHIRPS = 64      # Number of chirps per frame (NUM_CHIRPS_PER_FRAME in test.c)
-N_SAMPLES_PER_CHIRP = 128 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
+M_CHIRPS = 16     # Number of chirps per frame (NUM_CHIRPS_PER_FRAME in test.c)
+N_SAMPLES_PER_CHIRP = 256 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
 NUM_RX_ANTENNAS = 3 # Number of RX antennas used by the ESP32 (NUM_RX_ANTENNAS in test.c)
-ANTENNA_INDEX_TO_DISPLAY = 0 # 0 for Rx1, 1 for Rx2, 2 for Rx3
+ANTENNA_INDEX_TO_DISPLAY = 1 # 0 for Rx1, 1 for Rx2, 2 for Rx3
 
 EXPECTED_SAMPLES_IN_FLAT_ARRAY = M_CHIRPS * N_SAMPLES_PER_CHIRP * NUM_RX_ANTENNAS
 
@@ -76,10 +77,6 @@ def connect_serial():
         return False
 
 def parse_frame_data_from_serial(ser_conn):
-    """
-    Reads a line from serial, parses it, logs it to a file,
-    and returns the data for the selected antenna, frame number, or None.
-    """
     if not ser_conn or not ser_conn.is_open:
         print("Serial port not open.")
         return None, None
@@ -89,7 +86,6 @@ def parse_frame_data_from_serial(ser_conn):
         if not line:
             return None, None
 
-        # --- MODIFICATION: Write frame to log file ---
         if line.startswith("Frame") and log_file:
             log_file.write(line + "\n")
 
@@ -127,14 +123,33 @@ def parse_frame_data_from_serial(ser_conn):
 
 # --- Plotting Setup ---
 plt.ion()
-fig, (ax_raw, ax_doppler) = plt.subplots(2, 1, figsize=(10, 14))
+fig, (ax_raw, ax_range, ax_doppler) = plt.subplots(3, 1, figsize=(10, 18))
+
+# --- Raw Data Plot Setup ---
 initial_raw_data = np.zeros((M_CHIRPS, N_SAMPLES_PER_CHIRP))
 img_raw_map = ax_raw.imshow(initial_raw_data, aspect='auto', origin='lower', cmap='viridis')
 fig.colorbar(img_raw_map, ax=ax_raw, label='ADC Value')
 ax_raw.set_xlabel("Sample Number (Time)")
 ax_raw.set_ylabel("Chirp Number")
 ax_raw.set_title("Raw ADC Data Matrix (Live)")
+
+# --- Range Profile Plot Setup for All Chirps (RESTORED) ---
 range_axis_plot_m = np.linspace(0, R_MAX_M, RANGE_FFT_LEN // 2)
+PLOT_R_MAX_DISPLAY_M = min(R_MAX_M, 5.0)
+ax_range.set_xlabel("Range (m)")
+ax_range.set_ylabel("Magnitude (dB)")
+ax_range.set_title("Range Profile per Chirp")
+ax_range.set_xlim(0, PLOT_R_MAX_DISPLAY_M)
+ax_range.grid(True)
+colors = cm.jet(np.linspace(0, 1, M_CHIRPS))
+lines_range_profile = []
+for i in range(M_CHIRPS):
+    line, = ax_range.plot(range_axis_plot_m, np.zeros(RANGE_FFT_LEN // 2), color=colors[i], lw=0.75)
+    lines_range_profile.append(line)
+sm = plt.cm.ScalarMappable(cmap=cm.jet, norm=plt.Normalize(vmin=0, vmax=M_CHIRPS - 1))
+fig.colorbar(sm, ax=ax_range, label='Chirp Number')
+
+# --- Range-Doppler Plot Setup ---
 velocity_axis_plot_mps = np.linspace(-V_MAX_MPS, V_MAX_MPS, DOPPLER_FFT_LEN)
 initial_img_data = np.zeros((DOPPLER_FFT_LEN, RANGE_FFT_LEN // 2))
 img_range_doppler = ax_doppler.imshow(initial_img_data, aspect='auto', origin='lower', extent=[0, R_MAX_M, velocity_axis_plot_mps[0], velocity_axis_plot_mps[-1]], cmap='jet')
@@ -142,9 +157,9 @@ fig.colorbar(img_range_doppler, ax=ax_doppler, label='Magnitude (dB)')
 ax_doppler.set_xlabel("Range (m)")
 ax_doppler.set_ylabel("Velocity (m/s)")
 ax_doppler.set_title("Range-Doppler Spectrum (Live Data)")
-PLOT_R_MAX_DISPLAY_M = min(R_MAX_M, 5.0)
 ax_doppler.set_xlim(0, PLOT_R_MAX_DISPLAY_M)
 ax_doppler.set_ylim(-V_MAX_MPS, V_MAX_MPS)
+
 plt.tight_layout(pad=3.0)
 fig.canvas.draw_idle()
 plt.show(block=False)
@@ -154,7 +169,6 @@ if not connect_serial():
     print("Exiting due to serial connection failure.")
     exit()
 
-# --- Open log file ---
 try:
     log_file = open("radar_frames.log", "w")
     print("--- Logging full frames to radar_frames.log ---")
@@ -168,33 +182,50 @@ try:
         cpi_data_matrix, frame_num = parse_frame_data_from_serial(ser)
 
         if cpi_data_matrix is not None and frame_num is not None:
-            # Update Raw Data Plot
+            # --- Update Raw Data Plot ---
             img_raw_map.set_data(cpi_data_matrix)
             raw_min, raw_max = np.min(cpi_data_matrix), np.max(cpi_data_matrix)
             img_raw_map.set_clim(vmin=raw_min, vmax=raw_max)
             ax_raw.set_title(f"Raw ADC Data Matrix (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
             
-            # Windowing
-            range_window = signal.windows.blackman(N_SAMPLES_PER_CHIRP)
+            # --- Windowing ---
+            range_window = signal.windows.hamming(N_SAMPLES_PER_CHIRP)
             cpi_data_windowed_range = cpi_data_matrix * range_window[np.newaxis, :]
-            doppler_window = signal.windows.blackman(M_CHIRPS)
+            doppler_window = signal.windows.hamming(M_CHIRPS)
             cpi_data_windowed_both = cpi_data_windowed_range * doppler_window[:, np.newaxis]
 
-            # Range-Doppler FFT Processing
+            # --- Range FFT ---
             range_fft_result = fft(cpi_data_windowed_both, n=RANGE_FFT_LEN, axis=1)
+
+            # --- Update Range Profile Plot (RESTORED) ---
+            range_profiles_db = 20 * np.log10(np.abs(range_fft_result[:, :RANGE_FFT_LEN//2]) + 1e-9)
+            for i in range(M_CHIRPS):
+                lines_range_profile[i].set_ydata(range_profiles_db[i, :])
+            max_db_val = np.max(range_profiles_db)
+            ax_range.set_ylim(0, max_db_val + 5)
+            ax_range.set_title(f"Range Profile per Chirp (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
+
+            # --- MODIFIED: Range-Doppler FFT Processing (based on Notebook) ---
+            # 1. Doppler FFT across the chirps (axis 0)
             range_doppler_fft_result = fft(range_fft_result, n=DOPPLER_FFT_LEN, axis=0)
-            range_doppler_spectrum_shifted = fftshift(range_doppler_fft_result, axes=(0,1))
+            
+            # 2. Shift only the Doppler axis (axis 0), as done in the notebook
+            range_doppler_spectrum_shifted = fftshift(range_doppler_fft_result, axes=0)
+            
+            # 3. Convert to dB
             range_doppler_spectrum_abs = np.abs(range_doppler_spectrum_shifted)
             range_doppler_spectrum_db = 20 * np.log10(range_doppler_spectrum_abs + 1e-9)
-            range_doppler_to_plot_db = range_doppler_spectrum_db[:, RANGE_FFT_LEN//2:]
+            
+            # 4. Slice the first half of the range axis for plotting (since it was not shifted)
+            range_doppler_to_plot_db = range_doppler_spectrum_db[:, :RANGE_FFT_LEN//2]
 
-            # Update Range-Doppler Plot
+            # --- Update Range-Doppler Plot ---
             img_range_doppler.set_data(range_doppler_to_plot_db)
             current_max_db = np.max(range_doppler_to_plot_db)
             img_range_doppler.set_clim(vmin=current_max_db - 40, vmax=current_max_db)
             ax_doppler.set_title(f"Range-Doppler Spectrum (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
             
-            # Draw Both Plots
+            # --- Draw All Plots ---
             fig.canvas.draw_idle()
             fig.canvas.flush_events()
         
@@ -207,7 +238,6 @@ except Exception as e:
     import traceback
     traceback.print_exc()
 finally:
-    # --- Close all open resources ---
     if ser and ser.is_open:
         ser.close()
         print("Serial port closed.")
