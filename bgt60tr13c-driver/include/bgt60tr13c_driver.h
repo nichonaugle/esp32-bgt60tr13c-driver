@@ -39,4 +39,9 @@ esp_err_t get_frame_size(uint32_t *external_frame_size);
 esp_err_t get_interrupt_frame_size_trigger(uint32_t *external_frame_size);
 esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code);
 
+// Additional utility functions
+esp_err_t xensiv_bgt60tr13c_read_back_registers(void);
+esp_err_t xensiv_bgt60tr13c_verify_configuration(void);
+esp_err_t xensiv_bgt60tr13c_read_specific_registers(const uint32_t *reg_addresses, uint32_t num_regs);
+
 #endif /* XENSIV_BGT60TR13C_H */

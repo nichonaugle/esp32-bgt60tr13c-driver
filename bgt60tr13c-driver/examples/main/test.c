@@ -222,12 +222,42 @@ void app_main(void) {
         ESP_LOGI(TAG, "Radar configured with base settings from bgt60tr13c_config.h");
     }
 
+    // === REGISTER VERIFICATION SECTION ===
+    ESP_LOGI(TAG, "=== STARTING REGISTER VERIFICATION ===");
+    
+    // Verify that all registers match what we tried to write
+    ESP_LOGI(TAG, "Verifying radar configuration...");
+    ret = xensiv_bgt60tr13c_verify_configuration();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Configuration verification failed! Some registers don't match expected values.");
+        ESP_LOGE(TAG, "This could explain why the radar isn't working properly.");
+        // Continue anyway to see what the actual values are
+    } else {
+        ESP_LOGI(TAG, "Configuration verification successful - all registers match expected values");
+    }
+
+    // Read back all registers for detailed inspection
+    ESP_LOGI(TAG, "Reading back all configured registers for detailed inspection...");
+    xensiv_bgt60tr13c_read_back_registers();
+
+    // Read critical status registers to see radar state
+    const uint32_t status_regs[] = {
+        XENSIV_BGT60TR13C_REG_STAT0,        // Power mode, FSM state
+        XENSIV_BGT60TR13C_REG_STAT1,        // Frame/shape counters
+        XENSIV_BGT60TR13C_REG_FSTAT_TR13C,  // FIFO status
+        XENSIV_BGT60TR13C_REG_CHIP_ID       // Chip verification
+    };
+    ESP_LOGI(TAG, "Reading critical status registers...");
+    xensiv_bgt60tr13c_read_specific_registers(status_regs, sizeof(status_regs)/sizeof(status_regs[0]));
+    
+    ESP_LOGI(TAG, "=== REGISTER VERIFICATION COMPLETE ===");
+
     // --- Modify SFCTL:FIFO_CREF for earlier IRQ generation ---
     ESP_LOGI(TAG, "Modifying SFCTL:FIFO_CREF for earlier IRQ generation.");
     uint32_t sfctl_val = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_SFCTL);
     ESP_LOGI(TAG, "Original SFCTL value: 0x%08lX", sfctl_val);
 
-    // CRITICAL FIX: Use 32 samples instead of 64 for faster IRQ response to catch early chirps
+    // Use 32 samples instead of 64 for faster IRQ response to catch early chirps
     uint32_t new_sfctl_data = (sfctl_val & ~0x1FFFU) | 0x020U;  // 0x20 = 32 samples
 
     ESP_LOGI(TAG, "SFCTL value to write with FIFO_CREF=0x20 (32 samples): 0x%08lX", new_sfctl_data);
