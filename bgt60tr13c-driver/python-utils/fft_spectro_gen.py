@@ -4,9 +4,14 @@ import matplotlib.cm as cm  # Import colormap library
 from scipy import signal # For window functions
 from scipy.constants import c # Speed of light
 from numpy.fft import fft, fftshift # FFT functions
+from numpy.lib.stride_tricks import sliding_window_view # For fast CFAR
+import warnings
 import serial
 import time
 import re
+
+# --- Suppress DeprecationWarning from sliding_window_view ---
+warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning)
 
 # --- Serial Port Configuration ---
 SERIAL_PORT = '/dev/tty.SLAB_USBtoUART2'  # <<< --- CHANGE THIS TO YOUR ESP32's SERIAL PORT
@@ -59,6 +64,30 @@ print(f"Calculated Max Unambiguous Velocity: +/- {V_MAX_MPS:.2f} m/s")
 
 RANGE_FFT_LEN = N_SAMPLES_PER_CHIRP * 4
 DOPPLER_FFT_LEN = M_CHIRPS * 4
+
+# --- CFAR Target Detection Function (adapted from notebook example) ---
+def cfar_fast_db(x_db, num_ref_cells, num_guard_cells, bias_db, method=np.mean):
+    """
+    Fast, vectorized CFAR implementation for log-magnitude (dB) data.
+    """
+    pad = int(num_ref_cells + num_guard_cells)
+    
+    # Use sliding_window_view to create windows of the input signal
+    all_windows = sliding_window_view(x_db, (num_ref_cells * 2) + (num_guard_cells * 2) + 1)
+    
+    # Remove guard cells and the "cell under test" (CUT) from each window
+    # Indices to delete are the guard cells and the CUT in the middle of the window
+    indices_to_delete = np.arange(num_ref_cells, num_ref_cells + (num_guard_cells * 2) + 1)
+    reference_cells = np.delete(all_windows, indices_to_delete, axis=1)
+    
+    # Apply the specified method (e.g., np.mean) to the reference cells for each window
+    noise_floor_estimate = method(reference_cells, axis=1)
+    
+    # Pad the result to match the original signal length
+    thresholds = np.pad(noise_floor_estimate, (pad, pad), constant_values=(np.nan, np.nan))
+    
+    # Add the bias (offset) in dB
+    return thresholds + bias_db
 
 # --- Data Acquisition and Parsing ---
 ser = None
@@ -123,7 +152,8 @@ def parse_frame_data_from_serial(ser_conn):
 
 # --- Plotting Setup ---
 plt.ion()
-fig, (ax_raw, ax_range, ax_doppler) = plt.subplots(3, 1, figsize=(10, 18))
+# Add a 4th subplot for the CFAR results
+fig, (ax_raw, ax_range, ax_doppler, ax_cfar) = plt.subplots(4, 1, figsize=(10, 24))
 
 # --- Raw Data Plot Setup ---
 initial_raw_data = np.zeros((M_CHIRPS, N_SAMPLES_PER_CHIRP))
@@ -133,7 +163,7 @@ ax_raw.set_xlabel("Sample Number (Time)")
 ax_raw.set_ylabel("Chirp Number")
 ax_raw.set_title("Raw ADC Data Matrix (Live)")
 
-# --- Range Profile Plot Setup for All Chirps (RESTORED) ---
+# --- Range Profile Plot Setup for All Chirps ---
 range_axis_plot_m = np.linspace(0, R_MAX_M, RANGE_FFT_LEN // 2)
 PLOT_R_MAX_DISPLAY_M = min(R_MAX_M, 5.0)
 ax_range.set_xlabel("Range (m)")
@@ -159,6 +189,18 @@ ax_doppler.set_ylabel("Velocity (m/s)")
 ax_doppler.set_title("Range-Doppler Spectrum (Live Data)")
 ax_doppler.set_xlim(0, PLOT_R_MAX_DISPLAY_M)
 ax_doppler.set_ylim(-V_MAX_MPS, V_MAX_MPS)
+
+# --- CFAR Target Plot Setup ---
+ax_cfar.set_xlabel("Range (m)")
+ax_cfar.set_ylabel("Magnitude (dB)")
+ax_cfar.set_title("Averaged Range Profile & CFAR Detections")
+ax_cfar.set_xlim(0, PLOT_R_MAX_DISPLAY_M)
+ax_cfar.grid(True)
+line_avg_range, = ax_cfar.plot(range_axis_plot_m, np.zeros(RANGE_FFT_LEN // 2), c='b', lw=1.0, label='Avg. Range Profile')
+line_cfar_thresh, = ax_cfar.plot(range_axis_plot_m, np.zeros(RANGE_FFT_LEN // 2), c='y', lw=1.5, ls='--', label='CFAR Threshold')
+line_targets, = ax_cfar.plot([], [], 'ro', markersize=8, label='Detected Targets')
+ax_cfar.legend(loc="upper right")
+
 
 plt.tight_layout(pad=3.0)
 fig.canvas.draw_idle()
@@ -197,26 +239,55 @@ try:
             # --- Range FFT ---
             range_fft_result = fft(cpi_data_windowed_both, n=RANGE_FFT_LEN, axis=1)
 
-            # --- Update Range Profile Plot (RESTORED) ---
-            range_profiles_db = 20 * np.log10(np.abs(range_fft_result[:, :RANGE_FFT_LEN//2]) + 1e-9)
+            # --- Update Range Profile Plot ---
+            range_profiles_abs = np.abs(range_fft_result[:, :RANGE_FFT_LEN//2])
+            range_profiles_db = 20 * np.log10(range_profiles_abs + 1e-9)
             for i in range(M_CHIRPS):
                 lines_range_profile[i].set_ydata(range_profiles_db[i, :])
             max_db_val = np.max(range_profiles_db)
-            ax_range.set_ylim(0, max_db_val + 5)
+            ax_range.set_ylim(0, max_db_val + 5 if max_db_val > -np.inf else 10)
             ax_range.set_title(f"Range Profile per Chirp (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
 
-            # --- MODIFIED: Range-Doppler FFT Processing (based on Notebook) ---
-            # 1. Doppler FFT across the chirps (axis 0)
+            # --- CFAR Processing on Averaged Range Profile ---
+            avg_range_profile_db = np.mean(range_profiles_db, axis=0)
+            
+            # CFAR Parameters - these can be tuned
+            NUM_GUARD_CELLS = 4
+            NUM_REF_CELLS = 10
+            CFAR_BIAS_DB = 12.0 # Bias in dB to be added to the noise floor estimate
+
+            cfar_threshold_db = cfar_fast_db(
+                avg_range_profile_db,
+                NUM_REF_CELLS,
+                NUM_GUARD_CELLS,
+                bias_db=CFAR_BIAS_DB
+            )
+            # Find indices where the signal is above the CFAR threshold
+            target_indices = np.where(avg_range_profile_db > cfar_threshold_db)[0]
+
+            # --- Update CFAR Plot ---
+            line_avg_range.set_ydata(avg_range_profile_db)
+            line_cfar_thresh.set_ydata(cfar_threshold_db)
+            
+            # Plot detected targets as red circles
+            if len(target_indices) > 0:
+                target_ranges_m = range_axis_plot_m[target_indices]
+                target_magnitudes_db = avg_range_profile_db[target_indices]
+                line_targets.set_data(target_ranges_m, target_magnitudes_db)
+            else:
+                line_targets.set_data([], []) # Clear targets if none are found
+
+            y_min_cfar = np.nanmin(avg_range_profile_db)
+            y_max_cfar = np.nanmax(avg_range_profile_db)
+            ax_cfar.set_ylim(max(y_min_cfar - 5, 0), y_max_cfar + 5 if y_max_cfar > -np.inf else 10)
+            ax_cfar.set_title(f"CFAR Detections (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
+
+
+            # --- Range-Doppler FFT Processing ---
             range_doppler_fft_result = fft(range_fft_result, n=DOPPLER_FFT_LEN, axis=0)
-            
-            # 2. Shift only the Doppler axis (axis 0), as done in the notebook
             range_doppler_spectrum_shifted = fftshift(range_doppler_fft_result, axes=0)
-            
-            # 3. Convert to dB
             range_doppler_spectrum_abs = np.abs(range_doppler_spectrum_shifted)
             range_doppler_spectrum_db = 20 * np.log10(range_doppler_spectrum_abs + 1e-9)
-            
-            # 4. Slice the first half of the range axis for plotting (since it was not shifted)
             range_doppler_to_plot_db = range_doppler_spectrum_db[:, :RANGE_FFT_LEN//2]
 
             # --- Update Range-Doppler Plot ---

@@ -42,7 +42,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
         vTaskDelete(NULL); return;
     }
 
-    uint32_t temp_buf_len_bytes = 4092; 
+    uint32_t temp_buf_len_bytes = 4092;
 
     uint16_t *frame_buf = (uint16_t *)malloc(frame_size_samples * sizeof(uint16_t));
     uint8_t *temp_buf = (uint8_t *)malloc(temp_buf_len_bytes * sizeof(uint8_t));
@@ -86,11 +86,13 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
             bool frame_collection_error = false;
             uint32_t fifo_timeouts = 0;
             const uint32_t MAX_FIFO_TIMEOUTS = 15; // Increased for lower FIFO_CREF
+            uint32_t irq_count = 0; // For debugging IRQ behavior
 
             // Modified collection loop - adjusted timeout for 32-sample threshold
             while (current_idx < frame_size_samples) {
                 if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(800)) == pdTRUE) { 
                     fifo_timeouts = 0; 
+                    irq_count++;
                     
                     memset(temp_buf, 0, temp_buf_len_bytes);
                     err_check = xensiv_bgt60tr13c_fifo_read(temp_buf, temp_buf_len_bytes, 0);
@@ -102,18 +104,29 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                         break; 
                     }
 
+                    // Count how much valid data we actually got from FIFO
+                    uint32_t samples_read_this_irq = 0;
+                    uint32_t current_idx_before = current_idx;
+
                     // Process the 12-bit data packed in 3-byte format
                     for (uint32_t i = 0; (i + 2) < temp_buf_len_bytes; i += 3) {
                         if (current_idx < frame_size_samples) {
                             frame_buf[current_idx] = (temp_buf[i] << 4) | (temp_buf[i + 1] >> 4);
                             current_idx++;
+                            samples_read_this_irq++;
                         } else { break; }
 
                         if (current_idx < frame_size_samples) {
                             frame_buf[current_idx] = ((temp_buf[i + 1] & 0x0F) << 8) | temp_buf[i + 2];
                             current_idx++;
+                            samples_read_this_irq++;
                         } else { break; }
                     }
+                    
+                    // Log how much data we got per IRQ
+                    ESP_LOGI(TAG, "IRQ #%lu: Read %lu samples (%lu bytes). Total: %lu/%lu samples", 
+                             irq_count, samples_read_this_irq, (samples_read_this_irq * 3 / 2), 
+                             current_idx, frame_size_samples);
                     
                     if (current_idx >= frame_size_samples) {
                          ESP_LOGD(TAG, "All samples for frame collected based on current_idx.");
@@ -122,10 +135,11 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
 
                 } else { 
                     fifo_timeouts++;
-                    ESP_LOGW(TAG, "Timeout waiting for FIFO IRQ (%lu/%lu samples collected). Attempt %lu/%lu for frame %lu.",
-                             current_idx, frame_size_samples, fifo_timeouts, MAX_FIFO_TIMEOUTS, total_frames_collected_count); 
+                    ESP_LOGW(TAG, "Timeout waiting for FIFO IRQ (%lu/%lu samples collected). IRQ count: %lu, Attempt %lu/%lu for frame %lu.",
+                             current_idx, frame_size_samples, irq_count, fifo_timeouts, MAX_FIFO_TIMEOUTS, total_frames_collected_count); 
                     if (fifo_timeouts >= MAX_FIFO_TIMEOUTS) {
-                        ESP_LOGE(TAG, "Too many FIFO IRQ timeouts. Frame %lu declared incomplete.", total_frames_collected_count);
+                        ESP_LOGE(TAG, "Too many FIFO IRQ timeouts. Frame %lu declared incomplete after %lu IRQs.", 
+                                 total_frames_collected_count, irq_count);
                         frame_collection_error = true;
                         break; 
                     }
@@ -133,8 +147,9 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
             } 
 
             if (!frame_collection_error && current_idx >= frame_size_samples) {
-                ESP_LOGI(TAG, "Full frame %lu collected (%lu samples). Printing to UART...",
-                         total_frames_collected_count, frame_size_samples);
+                ESP_LOGI(TAG, "Full frame %lu collected (%lu samples) with %lu IRQs. Average: %lu samples/IRQ",
+                         total_frames_collected_count, frame_size_samples, irq_count, 
+                         (irq_count > 0) ? (frame_size_samples / irq_count) : 0);
 
                 printf("Frame %lu: [", total_frames_collected_count);
                 for (uint32_t i = 0; i < frame_size_samples; i++) {
@@ -153,8 +168,8 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                 vTaskDelay(pdMS_TO_TICKS(50));
 
             } else {
-                ESP_LOGE(TAG, "Frame %lu was not fully collected or had errors (collected %lu/%lu samples). Not printing.",
-                         total_frames_collected_count, current_idx, frame_size_samples);
+                ESP_LOGE(TAG, "Frame %lu was not fully collected or had errors (collected %lu/%lu samples) after %lu IRQs. Not printing.",
+                         total_frames_collected_count, current_idx, frame_size_samples, irq_count);
                 current_idx = 0; 
                 memset(frame_buf, 0, frame_size_samples * sizeof(uint16_t));
             }
