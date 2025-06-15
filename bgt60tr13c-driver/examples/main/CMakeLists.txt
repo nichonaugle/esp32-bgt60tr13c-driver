@@ -1,2 +1,10 @@
-idf_component_register(SRCS "test.c" "../../bgt60tr13c_driver.c"
-                    INCLUDE_DIRS "." "../../include")
+idf_component_register(SRCS "main.c" 
+                            "radar_config.c"
+                            "i2c/i2c_slave.c"
+                            "radar_proc/radar_acquisition.c"
+                            "radar_proc/radar_processing.c"
+                            "../../bgt60tr13c_driver.c"
+                       INCLUDE_DIRS "." 
+                                   "i2c"
+                                   "radar_proc"
+                                   "../../include")
