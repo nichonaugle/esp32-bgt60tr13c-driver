@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
-#include "driver/i2c.h"
 
 // --- I2C Slave Configuration ---
 #define I2C_SLAVE_PORT          I2C_NUM_0
@@ -27,14 +26,10 @@ typedef enum {
     REG_FRAME_COUNT = 0x11,       // Current frame count (read-only)
 } i2c_register_t;
 
-// --- I2C Slave Functions (to be implemented) ---
+// --- I2C Slave Functions ---
 esp_err_t i2c_slave_init(void);
 esp_err_t i2c_slave_deinit(void);
 void i2c_slave_task(void *pvParameters);
-
-// --- Register Access Functions (to be implemented) ---
-esp_err_t i2c_slave_read_register(uint8_t reg_addr, uint8_t *data, size_t len);
-esp_err_t i2c_slave_write_register(uint8_t reg_addr, const uint8_t *data, size_t len);
 
 // --- Task Management ---
 void i2c_slave_task_create(void);

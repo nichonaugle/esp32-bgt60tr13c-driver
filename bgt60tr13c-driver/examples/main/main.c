@@ -88,7 +88,7 @@ void app_main(void) {
     // Create radar acquisition task
     radar_acquisition_task_create();
     
-    // Create I2C slave task (when implementation is ready)
+    // Create I2C slave task
     i2c_slave_task_create();
     
     ESP_LOGI(TAG, "=== System Initialization Complete ===");

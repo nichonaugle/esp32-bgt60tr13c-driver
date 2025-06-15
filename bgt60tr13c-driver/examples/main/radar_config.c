@@ -12,7 +12,7 @@ void radar_config_init(void) {
     g_radar_config.useful_range_m = 5.0f;
     g_radar_config.num_guard_cells = 4;
     g_radar_config.num_ref_cells = 10;
-    g_radar_config.cfar_bias_db = 13.0f
+    g_radar_config.cfar_bias_db = 13.0f;
     g_radar_config.enable_uart_plotting = false;
     g_radar_config.frame_delay_ms = 500;
     
