@@ -14,12 +14,64 @@
 
 static const char *TAG = "RADAR_MAIN";
 
+// Test mode task - toggles motion detection flag periodically
+void test_mode_task(void *pvParameters) {
+    ESP_LOGI(TAG, "I2C Test Mode Task Started");
+    
+    bool motion_state = false;
+    
+    for (;;) {
+        // Toggle motion detection every 3 seconds
+        motion_state = !motion_state;
+        radar_config_set_motion_detected(motion_state);
+        
+        ESP_LOGI(TAG, "Test Mode: Motion detected = %s", motion_state ? "TRUE" : "FALSE");
+        
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
 void app_main(void) {
     ESP_LOGI(TAG, "=== BGT60TR13C Radar System Starting ===");
     
     // Initialize radar configuration first
     radar_config_init();
     radar_config_t *config = radar_config_get();
+    
+    // Initialize I2C master interrupt pin
+    esp_err_t interrupt_err = radar_config_init_interrupt_pin();
+    if (interrupt_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to initialize I2C master interrupt pin: %s", esp_err_to_name(interrupt_err));
+    }
+    
+    // Check if test mode is enabled (compile-time define)
+    if (I2C_TEST_MODE_ENABLED) {
+        ESP_LOGI(TAG, "=== I2C TEST MODE ENABLED ===");
+        ESP_LOGI(TAG, "Radar SPI and processing disabled");
+        ESP_LOGI(TAG, "Only I2C slave and test task will run");
+        ESP_LOGI(TAG, "I2C master interrupt pin: GPIO %d", I2C_MASTER_IRQ_PIN);
+        
+        // Create I2C slave task only
+        i2c_slave_task_create();
+        
+        // Create test mode task that toggles motion detection
+        xTaskCreate(test_mode_task, "test_mode_task", 4096, NULL, 3, NULL);
+        
+        ESP_LOGI(TAG, "=== Test Mode Initialization Complete ===");
+        ESP_LOGI(TAG, "Use I2C register 0x21 to read motion detection status");
+        ESP_LOGI(TAG, "Watch GPIO %d for interrupt signals", I2C_MASTER_IRQ_PIN);
+        ESP_LOGI(TAG, "Set I2C_TEST_MODE_ENABLED to 0 and recompile for normal radar mode");
+        
+        // Main loop - just delay to keep the task running
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+        
+        return; // Exit early, don't initialize radar
+    }
+    
+    // Normal radar mode - proceed with full initialization
+    ESP_LOGI(TAG, "=== NORMAL RADAR MODE ===");
     
     // Initialize SPI bus for radar communication
     spi_bus_config_t bus_config = {
@@ -56,6 +108,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "FFT size: %d (4x zero-padded)", RANGE_FFT_SIZE);
     ESP_LOGI(TAG, "Total range bins: %d", N_RANGE_BINS);
     ESP_LOGI(TAG, "Theoretical max range: %.2f m", R_MAX_M);
+    ESP_LOGI(TAG, "I2C master interrupt pin: GPIO %d", I2C_MASTER_IRQ_PIN);
     ESP_LOGI(TAG, "Current Configuration:");
     ESP_LOGI(TAG, "  - Antenna index: %d", config->antenna_index);
     ESP_LOGI(TAG, "  - Useful range: %.1f m", config->useful_range_m);
@@ -69,6 +122,7 @@ void app_main(void) {
              N_SAMPLES_PER_CHIRP, M_CHIRPS);
     ESP_LOGI(TAG, "  - UART plotting: %s", config->enable_uart_plotting ? "ENABLED" : "DISABLED");
     ESP_LOGI(TAG, "  - Frame delay: %lu ms", config->frame_delay_ms);
+    ESP_LOGI(TAG, "  - Test mode: %s", I2C_TEST_MODE_ENABLED ? "ENABLED" : "DISABLED");
     ESP_LOGI(TAG, "===================================");
     
     // Configure GPIO for radar IRQ
@@ -93,6 +147,8 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "=== System Initialization Complete ===");
     ESP_LOGI(TAG, "Radar acquisition task started");
+    ESP_LOGI(TAG, "I2C slave ready");
+    ESP_LOGI(TAG, "GPIO interrupt pin ready on GPIO %d", I2C_MASTER_IRQ_PIN);
     ESP_LOGI(TAG, "System ready for operation");
     
     // Main loop - just delay to keep the task running

@@ -48,6 +48,15 @@ static void prepare_tx_data(uint8_t reg) {
             tx_buffer[0] = 0x01; // Running
             tx_length = 1;
             break;
+        case REG_TEST_MODE:
+            tx_buffer[0] = I2C_TEST_MODE_ENABLED ? 1 : 0;
+            tx_length = 1;
+            break;
+        case REG_MOTION_DETECTED:
+            // We use our thread-safe function to get the REAL motion state
+            tx_buffer[0] = radar_config_get_motion_detected_safe() ? 1 : 0;
+            tx_length = 1;
+            break;
         default:
             tx_buffer[0] = 0xFF; // Error
             tx_length = 1;
@@ -96,26 +105,25 @@ static void process_write(uint8_t reg, const uint8_t *data, size_t len) {
 }
 
 void i2c_slave_task(void *pvParameters) {
-    uint8_t rx_buffer[16];
-    
+    uint8_t rx_buffer[128];
+    int rx_len = 0;
+
+    ESP_LOGI(TAG, "Final I2C slave task started.");
+
     while (1) {
-        // Check for received data
-        int rx_len = i2c_slave_read_buffer(I2C_SLAVE_PORT, rx_buffer, sizeof(rx_buffer), 100 / portTICK_PERIOD_MS);
-        
+        rx_len = i2c_slave_read_buffer(I2C_SLAVE_PORT, rx_buffer, sizeof(rx_buffer), pdMS_TO_TICKS(100));
+
         if (rx_len > 0) {
             last_register = rx_buffer[0];
-            
-            // If more data, it's a write
-            if (rx_len > 1) {
-                process_write(last_register, &rx_buffer[1], rx_len - 1);
-            } else {
-                // Prepare response for read
+            ESP_LOGD(TAG, "I2C master interaction: Reg=0x%02X, Len=%d", last_register, rx_len);
+
+            if (rx_len > 1) { // Master is WRITING
+                process_write(last_register, rx_buffer + 1, rx_len - 1);
+            } else { // Master is setting register for a READ
                 prepare_tx_data(last_register);
                 i2c_slave_write_buffer(I2C_SLAVE_PORT, tx_buffer, tx_length, 0);
             }
         }
-        
-        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
@@ -123,26 +131,12 @@ esp_err_t i2c_slave_init(void) {
     i2c_config_t conf_slave = {
         .mode = I2C_MODE_SLAVE,
         .sda_io_num = I2C_SLAVE_SDA_PIN,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_io_num = I2C_SLAVE_SCL_PIN,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .slave.addr_10bit_en = 0,
         .slave.slave_addr = I2C_SLAVE_ADDR,
         .clk_flags = 0,
     };
-    
-    esp_err_t ret = i2c_param_config(I2C_SLAVE_PORT, &conf_slave);
-    if (ret != ESP_OK) return ret;
-    
-    ret = i2c_driver_install(I2C_SLAVE_PORT, conf_slave.mode, I2C_SLAVE_RX_BUF_LEN, I2C_SLAVE_TX_BUF_LEN, 0);
-    if (ret != ESP_OK) return ret;
-    
-    ESP_LOGI(TAG, "I2C slave ready on 0x%02X", I2C_SLAVE_ADDR);
-    return ESP_OK;
-}
-
-esp_err_t i2c_slave_deinit(void) {
-    return i2c_driver_delete(I2C_SLAVE_PORT);
+    i2c_param_config(I2C_SLAVE_PORT, &conf_slave);
+    return i2c_driver_install(I2C_SLAVE_PORT, conf_slave.mode, 128, 128, 0);
 }
 
 void i2c_slave_task_create(void) {
@@ -150,9 +144,6 @@ void i2c_slave_task_create(void) {
         ESP_LOGE(TAG, "Failed to initialize I2C slave");
         return;
     }
-    
-    if (xTaskCreate(i2c_slave_task, "i2c_slave", 4096, NULL, 4, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create I2C slave task");
-        i2c_slave_deinit();
-    }
+    // Use standard xTaskCreate, but with a high priority to ensure responsiveness.
+    xTaskCreate(i2c_slave_task, "i2c_slave", 4096, NULL, 6, NULL);
 }

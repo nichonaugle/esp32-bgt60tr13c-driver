@@ -24,6 +24,8 @@ typedef enum {
     REG_FRAME_DELAY = 0x0C,       // Frame delay in ms
     REG_SYSTEM_STATUS = 0x10,     // System status (read-only)
     REG_FRAME_COUNT = 0x11,       // Current frame count (read-only)
+    REG_TEST_MODE = 0x20,         // Enable/disable test mode
+    REG_MOTION_DETECTED = 0x21,   // Motion detection status (read-only in test mode)
 } i2c_register_t;
 
 // --- I2C Slave Functions ---

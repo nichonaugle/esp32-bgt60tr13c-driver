@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <esp_err.h>
 
 // --- Fixed Radar & System Parameters (from BGT60TR13C config) ---
 #define M_CHIRPS 16
@@ -32,6 +33,12 @@
 #define SPI_MISO_PIN GPIO_NUM_26
 #define RADAR_IRQ_PIN GPIO_NUM_4
 
+// --- I2C Master Interrupt Configuration ---
+#define I2C_MASTER_IRQ_PIN GPIO_NUM_2          // GPIO pin to signal I2C master when motion state changes
+
+// --- Test Mode Configuration ---
+#define I2C_TEST_MODE_ENABLED 1  // Set to 1 to enable test mode, 0 for normal radar operation
+
 // --- Dynamic Configuration Structure ---
 typedef struct {
     // Processing parameters
@@ -49,6 +56,9 @@ typedef struct {
     // Frame capture settings
     uint32_t frame_delay_ms;        // Delay between frames
     
+    // Test mode settings
+    bool motion_detected;           // Simulated motion detection for test mode
+    
 } radar_config_t;
 
 // --- Configuration Management Functions ---
@@ -59,5 +69,16 @@ void radar_config_set_useful_range(float range_m);
 void radar_config_set_cfar_params(uint8_t guard_cells, uint8_t ref_cells, float bias_db);
 void radar_config_set_uart_plotting(bool enable);
 void radar_config_set_frame_delay(uint32_t delay_ms);
+
+// Test mode functions
+void radar_config_set_motion_detected(bool detected);
+bool radar_config_get_motion_detected(void);
+
+// I2C master interrupt functions
+esp_err_t radar_config_init_interrupt_pin(void);
+void radar_config_trigger_motion_interrupt(bool motion_detected);
+void radar_config_update_interrupt_pin(void);
+
+bool radar_config_get_motion_detected_safe(void);
 
 #endif /* RADAR_CONFIG_H */

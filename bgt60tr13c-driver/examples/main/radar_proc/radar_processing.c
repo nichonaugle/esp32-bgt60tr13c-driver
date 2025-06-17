@@ -192,6 +192,9 @@ void detect_and_report_targets(radar_buffers_t *buffers, int useful_range_bins,
         printf("No targets detected.\n");
     }
     
+    // Update motion detection state and trigger interrupt if changed
+    radar_config_set_motion_detected(target_found);
+    
     // Simple debug info
     float max_signal_db = -1000.0f;
     int max_signal_bin = -1;
@@ -265,6 +268,6 @@ void process_radar_frame(radar_buffers_t *buffers, uint32_t frame_count) {
     perform_cfar_detection(buffers, useful_range_bins, 
                           config->num_guard_cells, config->num_ref_cells, config->cfar_bias_db);
 
-    // 6. Detect and report targets
+    // 6. Detect and report targets (now triggers GPIO interrupt automatically)
     detect_and_report_targets(buffers, useful_range_bins, frame_count, config->enable_uart_plotting);
 }
