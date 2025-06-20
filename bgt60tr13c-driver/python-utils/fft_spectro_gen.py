@@ -20,12 +20,12 @@ SERIAL_TIMEOUT_S = 0.1  # Serial read timeout in seconds
 
 # --- Radar & System Parameter Configuration (BGT60TR13C based) ---
 # These should match the configuration in your test.c or radar driver
-F_START_HZ = 60e9  # Start frequency of the chirp (Hz)
-F_END_HZ = 62e9  # End frequency of the chirp (Hz)
-TC_S = 0.0001935   # Chirp Repetition Time or Effective Chirp Duration (s)
+F_START_HZ = 61020098000  # Start frequency of the chirp (Hz)
+F_END_HZ = 61479902000  # End frequency of the chirp (Hz)
+TC_S = 0.00007   # Chirp Repetition Time or Effective Chirp Duration (s)
 
 M_CHIRPS = 16     # Number of chirps per frame (NUM_CHIRPS_PER_FRAME in test.c)
-N_SAMPLES_PER_CHIRP = 256 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
+N_SAMPLES_PER_CHIRP = 128 # Number of ADC samples per chirp (NUM_SAMPLES_PER_CHIRP in test.c)
 NUM_RX_ANTENNAS = 3 # Number of RX antennas used by the ESP32 (NUM_RX_ANTENNAS in test.c)
 ANTENNA_INDEX_TO_DISPLAY = 1 # 0 for Rx1, 1 for Rx2, 2 for Rx3
 
@@ -293,7 +293,7 @@ try:
             # --- Update Range-Doppler Plot ---
             img_range_doppler.set_data(range_doppler_to_plot_db)
             current_max_db = np.max(range_doppler_to_plot_db)
-            img_range_doppler.set_clim(vmin=current_max_db - 40, vmax=current_max_db)
+            img_range_doppler.set_clim(vmin=current_max_db - 65, vmax=current_max_db)
             ax_doppler.set_title(f"Range-Doppler Spectrum (Frame: {frame_num}, Ant: {ANTENNA_INDEX_TO_DISPLAY+1})")
             
             # --- Draw All Plots ---
