@@ -364,7 +364,7 @@ void app_main(void) {
         frame_trigger_count_main++;
         ESP_LOGI(TAG, "app_main: Triggering frame capture (main loop iter #%d)", frame_trigger_count_main);
         xSemaphoreGive(xFrameTriggerSemaphore);
-        vTaskDelay(pdMS_TO_TICKS(800)); // Wait between triggers
+        vTaskDelay(pdMS_TO_TICKS(50)); // Wait between triggers
                                          // Adjust based on expected processing time and desired interval.
     }
 }
