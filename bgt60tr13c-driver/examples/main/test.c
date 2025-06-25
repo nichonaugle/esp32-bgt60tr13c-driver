@@ -143,6 +143,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
                 vTaskDelay(pdMS_TO_TICKS(20)); // Allow reset to complete
 
                 err_check = xensiv_bgt60tr13c_start_frame_capture();
+                vTaskDelay(pdMS_TO_TICKS(15));
                 if (err_check != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to re-start frame capture post-print: %s", esp_err_to_name(err_check));
                 }
