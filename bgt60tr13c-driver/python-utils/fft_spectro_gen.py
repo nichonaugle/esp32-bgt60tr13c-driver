@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.fft import fft, fft2, fftshift
 from scipy.ndimage import median_filter
 from scipy.constants import c
+from matplotlib.gridspec import GridSpec
 
 # Radar parameters (adjust these)
 # CONSTANTS
@@ -41,7 +42,18 @@ ser = serial.Serial('/dev/ttyUSB0', 921600)  # Change COMX to your port
 
 # Setup main plot
 plt.ion()
-fig, ((ax_main, ax_beat), (ax_fft, ax_raw_data)) = plt.subplots(2, 2, figsize=(10, 12))
+fig = plt.figure(figsize=(14, 12)) # Create the figure first
+
+# Define a GridSpec object: 3 rows, 2 columns
+gs = GridSpec(3, 2, figure=fig)
+
+# Assign subplots using GridSpec slicing
+ax_main = fig.add_subplot(gs[:, 0]) # Spans all rows (:) in the first column (0)
+ax_beat = fig.add_subplot(gs[0, 1]) # First row (0), second column (1)
+ax_fft = fig.add_subplot(gs[1, 1])  # Second row (1), second column (1)
+ax_raw_data = fig.add_subplot(gs[2, 1]) # Third row (2), second column (1)
+
+#fig, ((ax_main), (ax_beat, ax_fft, ax_raw_data)) = plt.subplots(1, 2, figsize=(10, 12))
 
 # Range-Doppler plot
 im = ax_main.imshow(np.zeros((samples_per_chirp, chirps_per_frame)),
