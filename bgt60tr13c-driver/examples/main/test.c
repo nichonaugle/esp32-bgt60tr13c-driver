@@ -42,7 +42,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
         vTaskDelete(NULL); return;
     }
 
-    uint32_t temp_buf_len_bytes = 4092;
+    uint32_t temp_buf_len_bytes = 1026;
 
     uint16_t *frame_buf = (uint16_t *)malloc(frame_size_samples * sizeof(uint16_t));
     uint8_t *temp_buf = (uint8_t *)malloc(temp_buf_len_bytes * sizeof(uint8_t));
@@ -53,7 +53,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
         free(temp_buf);
         vTaskDelete(NULL); return;
     }
-    
+
     ESP_LOGI(TAG, "Frame buffer allocated for %lu samples (%lu bytes). temp_buf %lu bytes.",
              frame_size_samples, frame_size_samples * sizeof(uint16_t), temp_buf_len_bytes);
 
@@ -78,8 +78,8 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
 
             // CRITICAL: Allow radar initialization time before expecting data
             // This covers T_INIT0 + T_INIT1 + T_START timing from datasheet
-            ESP_LOGI(TAG, "Allowing radar initialization time (T_INIT0 + T_INIT1 + T_START)...");
-            vTaskDelay(pdMS_TO_TICKS(100));
+            //ESP_LOGI(TAG, "Allowing radar initialization time (T_INIT0 + T_INIT1 + T_START)...");
+            vTaskDelay(pdMS_TO_TICKS(50));
 
             uint32_t current_idx = 0;
             memset(frame_buf, 0, frame_size_samples * sizeof(uint16_t));
@@ -181,7 +181,7 @@ void xensiv_bgt60tr13c_radar_task(void *pvParameters) {
             if (err_check != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to reset FIFO post-frame: %s", esp_err_to_name(err_check));
             }
-            vTaskDelay(pdMS_TO_TICKS(20));
+            //vTaskDelay(pdMS_TO_TICKS(5));
 
             ESP_LOGI(TAG, "Frame acquisition cycle complete. Radar should be in deep sleep (MAX_FRAME_CNT=1 reached).");
         } 
@@ -335,7 +335,7 @@ void app_main(void) {
         frame_trigger_count_main++;
         ESP_LOGI(TAG, "app_main: Triggering frame capture (main loop iter #%d)", frame_trigger_count_main);
         xSemaphoreGive(xFrameTriggerSemaphore);
-        vTaskDelay(pdMS_TO_TICKS(50)); // Wait between triggers
+        vTaskDelay(pdMS_TO_TICKS(75)); // Wait between triggers
                                          // Adjust based on expected processing time and desired interval.
     }
 }
