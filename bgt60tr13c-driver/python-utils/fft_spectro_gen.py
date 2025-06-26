@@ -8,7 +8,7 @@ from matplotlib.gridspec import GridSpec
 
 # Radar parameters (adjust these)
 # CONSTANTS
-f_low = 60479900000
+f_low = 59479900000
 f_high = 61479900000
 f_bandwidth = abs(f_high-f_low)
 Tc = 0.00005738 # chirp time
@@ -35,7 +35,7 @@ signal_capture_time =  chirps_per_frame * PRT
 print(f"Signal capture time: {(signal_capture_time * 1e3)} ms")
 print(f"Max FPS: {1/signal_capture_time} fps")
 
-fft_len = samples_per_chirp * 4
+fft_len = samples_per_chirp * 8
 ranges = np.linspace(-r_max, r_max, fft_len)
 
 ser = serial.Serial('/dev/ttyUSB0', 921600)  # Change COMX to your port
@@ -111,7 +111,8 @@ while True:
         data = eval(data_str) if '[' in data_str else None
         if not data or len(data) < chirps_per_frame * samples_per_chirp: continue
         
-        # Process frame (USE ONLY 1 ANTENNA)
+        ###########################################
+        # Raw Signal Processing
         radar_data = np.array([float(x) for x in data], dtype=np.float32)
         if radar_data.shape[0] < samples_per_chirp * chirps_per_frame:
             padding_needed = samples_per_chirp * chirps_per_frame - radar_data.shape[0]
@@ -121,18 +122,17 @@ while True:
         radar_data = radar_data.reshape((chirps_per_frame, samples_per_chirp))
         print(f"Radar dataset shape: {radar_data.shape}\n")
         
-        # NEW: Update raw data plot
+        # Update raw data plot
         im_raw.set_data(radar_data)
-        im_raw.set_clim(vmin=np.min(radar_data), vmax=np.max(radar_data)) # Adjust if you want fixed range
+        im_raw.set_clim(vmin=np.min(radar_data), vmax=np.max(radar_data))
 
         ###########################################
-        # Beat Signal processing
+        # Beat Signal processing (Normalizes data and applies hanning window)
         ax_beat.clear()
         for i in range(chirps_per_frame):
             demodulated_signal = radar_data[i] - np.mean(radar_data[i])
             normalized_signal = (demodulated_signal / np.max(np.abs(demodulated_signal)))
             radar_data[i]=np.hanning(samples_per_chirp) * normalized_signal
-            #if i%32 == 0:
             ax_beat.plot(radar_data[i], color=colors[i], alpha=0.8, label='Coherent Integration')
 
         ###########################################
@@ -143,8 +143,7 @@ while True:
             X_k = fftshift(fft(radar_data[i], fft_len))
             X_k /= (samples_per_chirp / 2)
             X_k = 20 * np.log10(np.abs(X_k))
-            if i%32 == 0:
-                ax_fft.plot(ranges, X_k, color=colors[i], alpha=0.8, label='Coherent Integration')
+            ax_fft.plot(ranges, X_k, color=colors[i], alpha=0.8, label='Coherent Integration')
 
         ax_fft.set_xlim([0, r_max])
         ax_fft.set_ylim([-80, 0])
@@ -153,13 +152,12 @@ while True:
         # Range-Doppler processing
         raw_rd_map = fft2(radar_data.T)
         clutter_suppressed_rd_map = np.copy(raw_rd_map)
-        clutter_suppressed_rd_map[:, 0] = raw_rd_map[:, 0] * 1#0.01 
+        clutter_suppressed_rd_map[:, 0] = raw_rd_map[:, 0] * 0.1 
         rd = fftshift(np.abs(clutter_suppressed_rd_map)) / (samples_per_chirp / 2)
         
         # Update plot data
         #rd_log = 10 * np.log10(rd)
         #im.set_data(rd_log)
-        #im.set_clim(vmin=np.min(rd_log), vmax=np.max(rd_log))  # Dynamic scaling
         #ax_main.set_ylim([0, r_max])
         #fig.canvas.draw_idle()
         
@@ -169,11 +167,12 @@ while True:
 
         if frame_count >= num_frames_to_average:
             averaged_rd_map = accumulated_rd_map / num_frames_to_average
-            rd_log = 20 * np.log10(averaged_rd_map + 1e-10)
+            rd_log = 10 * np.log10(averaged_rd_map + 1e-10)
 
-            #rd_log = median_filter(rd_log, size=3)
+            rd_log = median_filter(rd_log, size=2)
 
             im.set_data(rd_log)
+            im.set_clim(vmin=np.min(rd_log), vmax=np.max(rd_log))  # Dynamic scaling
             ax_main.set_ylim([0, r_max])
             fig.canvas.draw_idle()
             
