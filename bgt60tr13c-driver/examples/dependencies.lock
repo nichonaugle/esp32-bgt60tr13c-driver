@@ -17,5 +17,5 @@ direct_dependencies:
 - espressif/esp-dsp
 - idf
 manifest_hash: 84ca9d5c69c75158b0f9f4154a917bab486b44b131d650a7e58c078051545842
-target: esp32c6
+target: esp32
 version: 2.0.0

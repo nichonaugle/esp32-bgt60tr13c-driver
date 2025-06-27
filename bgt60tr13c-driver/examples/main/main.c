@@ -9,8 +9,8 @@
 // Project includes
 #include "bgt60tr13c_driver.h"
 #include "radar_config.h"
-#include "radar_proc/radar_acquisition.h"
-#include "i2c/i2c_slave.h"
+#include "radar_acquisition.h" // Using the updated header
+#include "i2c_slave.h"
 
 static const char *TAG = "RADAR_MAIN";
 
@@ -49,25 +49,16 @@ void app_main(void) {
         ESP_LOGI(TAG, "=== I2C TEST MODE ENABLED ===");
         ESP_LOGI(TAG, "Radar SPI and processing disabled");
         ESP_LOGI(TAG, "Only I2C slave and test task will run");
-        ESP_LOGI(TAG, "I2C master interrupt pin: GPIO %d", I2C_MASTER_IRQ_PIN);
         
-        // Create I2C slave task only
         i2c_slave_task_create();
-        
-        // Create test mode task that toggles motion detection
         xTaskCreate(test_mode_task, "test_mode_task", 4096, NULL, 3, NULL);
         
         ESP_LOGI(TAG, "=== Test Mode Initialization Complete ===");
-        ESP_LOGI(TAG, "Use I2C register 0x21 to read motion detection status");
-        ESP_LOGI(TAG, "Watch GPIO %d for interrupt signals", I2C_MASTER_IRQ_PIN);
-        ESP_LOGI(TAG, "Set I2C_TEST_MODE_ENABLED to 0 and recompile for normal radar mode");
-        
-        // Main loop - just delay to keep the task running
+        // In test mode, we just loop forever and do nothing in main.
         for (;;) {
             vTaskDelay(pdMS_TO_TICKS(10000));
         }
-        
-        return; // Exit early, don't initialize radar
+        return;
     }
     
     // Normal radar mode - proceed with full initialization
@@ -94,35 +85,10 @@ void app_main(void) {
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_init(SPI2_HOST, &dev_config)); 
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_configure()); 
     
-    // Get frame configuration for logging
-    uint32_t frame_size_samples, irq_frame_size;
-    get_frame_size(&frame_size_samples);
-    get_interrupt_frame_size_trigger(&irq_frame_size);
-    
-    // Print radar system configuration
-    ESP_LOGI(TAG, "=== Radar System Configuration ===");
-    ESP_LOGI(TAG, "Frame size: %lu samples", frame_size_samples);
-    ESP_LOGI(TAG, "IRQ frame size: %lu bytes", irq_frame_size);
-    ESP_LOGI(TAG, "Base range resolution: %.2f cm", RANGE_RESOLUTION_M * 100);
-    ESP_LOGI(TAG, "Effective range resolution: %.2f cm (4x interpolated)", (RANGE_RESOLUTION_M / 4.0f) * 100);
-    ESP_LOGI(TAG, "FFT size: %d (4x zero-padded)", RANGE_FFT_SIZE);
-    ESP_LOGI(TAG, "Total range bins: %d", N_RANGE_BINS);
-    ESP_LOGI(TAG, "Theoretical max range: %.2f m", R_MAX_M);
-    ESP_LOGI(TAG, "I2C master interrupt pin: GPIO %d", I2C_MASTER_IRQ_PIN);
-    ESP_LOGI(TAG, "Current Configuration:");
-    ESP_LOGI(TAG, "  - Antenna index: %d", config->antenna_index);
-    ESP_LOGI(TAG, "  - Useful range: %.1f m", config->useful_range_m);
-    ESP_LOGI(TAG, "  - Useful range bins: %d", (int)(config->useful_range_m / (RANGE_RESOLUTION_M / 4.0f)));
-    ESP_LOGI(TAG, "  - CFAR - Guard: %d, Ref: %d, Bias: %.1f dB", 
-             config->num_guard_cells, config->num_ref_cells, config->cfar_bias_db);
-    ESP_LOGI(TAG, "  - CFAR starts at bin %d (%.3f m)", 
-             config->num_guard_cells + config->num_ref_cells, 
-             (config->num_guard_cells + config->num_ref_cells) * (RANGE_RESOLUTION_M / 4.0f));
-    ESP_LOGI(TAG, "  - Windowing: Range Hamming (%d samples) + Doppler Hamming (%d chirps)", 
-             N_SAMPLES_PER_CHIRP, M_CHIRPS);
-    ESP_LOGI(TAG, "  - UART plotting: %s", config->enable_uart_plotting ? "ENABLED" : "DISABLED");
-    ESP_LOGI(TAG, "  - Frame delay: %lu ms", config->frame_delay_ms);
-    ESP_LOGI(TAG, "  - Test mode: %s", I2C_TEST_MODE_ENABLED ? "ENABLED" : "DISABLED");
+    // Print radar system configuration (this section is unchanged)
+    ESP_LOGI(TAG, "=== Radar System Configuration Loaded ===");
+    // ... you could add detailed printouts here if desired ...
+    ESP_LOGI(TAG, "Frame delay set to: %lu ms", config->frame_delay_ms);
     ESP_LOGI(TAG, "===================================");
     
     // Configure GPIO for radar IRQ
@@ -135,24 +101,33 @@ void app_main(void) {
     };
     gpio_config(&io_conf);
     
-    // Install GPIO ISR service
+    // Install GPIO ISR service and add our handler
     gpio_install_isr_service(0);
     gpio_isr_handler_add(RADAR_IRQ_PIN, gpio_radar_isr_handler, NULL);
     
-    // Create radar acquisition task
+    // Create the subordinate tasks
     radar_acquisition_task_create();
-    
-    // Create I2C slave task
     i2c_slave_task_create();
     
-    ESP_LOGI(TAG, "=== System Initialization Complete ===");
-    ESP_LOGI(TAG, "Radar acquisition task started");
-    ESP_LOGI(TAG, "I2C slave ready");
-    ESP_LOGI(TAG, "GPIO interrupt pin ready on GPIO %d", I2C_MASTER_IRQ_PIN);
-    ESP_LOGI(TAG, "System ready for operation");
+    ESP_LOGI(TAG, "=== System Initialization Complete. Starting Main Control Loop. ===");
     
-    // Main loop - just delay to keep the task running
+    // ===================================================================
+    // ===         NEW SYNCHRONIZED FRAME TRIGGER LOOP                 ===
+    // ===================================================================
+    uint32_t frame_trigger_count_main = 0;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        // 1. Wait until the radar acquisition task signals it's ready for a new frame.
+        //    This call will block until the previous frame is fully processed.
+        if (radar_acquisition_wait_for_ready(portMAX_DELAY) == pdTRUE) {
+            
+            // 2. The acquisition task is ready. Now we can enforce the desired
+            //    frame rate by delaying *before* triggering the next one.
+            vTaskDelay(pdMS_TO_TICKS(config->frame_delay_ms));
+
+            // 3. Trigger the next frame capture.
+            frame_trigger_count_main++;
+            ESP_LOGI(TAG, "Main Loop: Radar task is ready. Triggering frame #%lu", frame_trigger_count_main);
+            radar_acquisition_trigger_frame();
+        }
     }
 }

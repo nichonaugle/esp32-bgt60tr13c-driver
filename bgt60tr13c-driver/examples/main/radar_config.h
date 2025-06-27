@@ -37,7 +37,7 @@
 #define I2C_MASTER_IRQ_PIN GPIO_NUM_2          // GPIO pin to signal I2C master when motion state changes
 
 // --- Test Mode Configuration ---
-#define I2C_TEST_MODE_ENABLED 1  // Set to 1 to enable test mode, 0 for normal radar operation
+#define I2C_TEST_MODE_ENABLED 0  // Set to 1 to enable test mode, 0 for normal radar operation
 
 // --- Dynamic Configuration Structure ---
 typedef struct {
