@@ -5,35 +5,41 @@
 #include <stdbool.h>
 #include "esp_err.h"
 
-// --- I2C Slave Configuration ---
+// I2C Slave Configuration
 #define I2C_SLAVE_PORT          I2C_NUM_0
-#define I2C_SLAVE_ADDR          0x28          // 7-bit slave address
-#define I2C_SLAVE_SDA_PIN       GPIO_NUM_21   // Default SDA pin
-#define I2C_SLAVE_SCL_PIN       GPIO_NUM_22   // Default SCL pin
-#define I2C_SLAVE_RX_BUF_LEN    128           // Receive buffer length
-#define I2C_SLAVE_TX_BUF_LEN    128           // Transmit buffer length
+#define I2C_SLAVE_ADDR          0x28
+#define I2C_SLAVE_SDA_PIN       GPIO_NUM_21
+#define I2C_SLAVE_SCL_PIN       GPIO_NUM_22
+#define I2C_SLAVE_RX_BUF_LEN    256
+#define I2C_SLAVE_TX_BUF_LEN    256
 
-// --- Register Map for I2C Communication ---
+// Register Map for I2C Communication
 typedef enum {
-    REG_ANTENNA_INDEX = 0x00,     // Select antenna (0-2)
-    REG_USEFUL_RANGE = 0x01,      // Useful range in meters (float)
-    REG_GUARD_CELLS = 0x05,       // CFAR guard cells
-    REG_REF_CELLS = 0x06,         // CFAR reference cells  
-    REG_CFAR_BIAS = 0x07,         // CFAR bias in dB (float)
-    REG_UART_PLOTTING = 0x0B,     // Enable/disable UART plotting
-    REG_FRAME_DELAY = 0x0C,       // Frame delay in ms
-    REG_SYSTEM_STATUS = 0x10,     // System status (read-only)
-    REG_FRAME_COUNT = 0x11,       // Current frame count (read-only)
-    REG_TEST_MODE = 0x20,         // Enable/disable test mode
-    REG_MOTION_DETECTED = 0x21,   // Motion detection status (read-only in test mode)
+    // State Registers (Read-Only)
+    REG_TEST_MODE_STATUS    = 0x00,
+    REG_MOTION_DETECTED     = 0x01,
+    REG_PRESENCE_CONFIRMED  = 0x02,
+    REG_SYSTEM_STATUS       = 0x03,
+
+    // Control & Tuning Registers (Read/Write)
+    REG_FRAME_DELAY_MS      = 0x10,
+    REG_BACKGROUND_ALPHA    = 0x20,
+    REG_RECALIBRATE_NOW     = 0x21,
+    REG_CFAR_NEAR_BIAS_DB   = 0x30,
+    REG_CFAR_FAR_BIAS_DB    = 0x31,
+    REG_CFAR_GUARDS         = 0x32,
+    REG_CFAR_REFS           = 0x33,
+    REG_HISTORY_LEN         = 0x40,
+    REG_MIN_DETECTIONS      = 0x41,
+    REG_MAX_RANGE_DIFF_M    = 0x42,
+    REG_UART_PLOTTING       = 0x50, // <-- NEW: Register to control plotting
+
 } i2c_register_t;
 
-// --- I2C Slave Functions ---
-esp_err_t i2c_slave_init(void);
-esp_err_t i2c_slave_deinit(void);
-void i2c_slave_task(void *pvParameters);
 
-// --- Task Management ---
+// I2C Slave Functions
+esp_err_t i2c_slave_init(void);
+void i2c_slave_task(void *pvParameters);
 void i2c_slave_task_create(void);
 
 #endif /* I2C_SLAVE_H */

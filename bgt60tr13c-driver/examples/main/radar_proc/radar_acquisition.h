@@ -13,20 +13,19 @@ void radar_acquisition_task_create(void);
 
 /**
  * @brief Signals the radar acquisition task to start capturing a single frame.
- * * This function should be called after confirming the radar task is ready.
  */
 void radar_acquisition_trigger_frame(void);
 
 /**
  * @brief Waits until the radar acquisition task is ready to accept a new frame trigger.
- * * @return pdTRUE if the semaphore was taken, pdFALSE on timeout.
+ * @return pdTRUE if the semaphore was taken, pdFALSE on timeout.
  */
 BaseType_t radar_acquisition_wait_for_ready(TickType_t xTicksToWait);
 
 /**
  * @brief ISR handler for the radar's FIFO interrupt.
- * * This should be attached to the GPIO connected to the radar's IRQ pin.
+ * @note The IRAM_ATTR is placed on the function definition in the .c file.
  */
-void IRAM_ATTR gpio_radar_isr_handler(void *arg);
+void gpio_radar_isr_handler(void *arg);
 
 #endif // RADAR_ACQUISITION_H
