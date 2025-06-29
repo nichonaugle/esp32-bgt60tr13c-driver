@@ -1,3 +1,5 @@
+// radar_config.h
+
 #ifndef RADAR_CONFIG_H
 #define RADAR_CONFIG_H
 
@@ -8,10 +10,7 @@
 // Set to 1 to enable I2C test mode firmware, 0 for normal operation
 #define I2C_TEST_MODE_ENABLED 0
 
-// ===================================================================
-// ===     EXACT Parameters from Python Script for Consistency     ===
-// ===================================================================
-#define PY_F_BANDWIDTH_HZ       (2000000000.0)
+#define PY_F_BANDWIDTH_HZ       (957000000.0)
 #define PY_TC_S                 (0.00005738)
 
 // --- Sensor Hardware Parameters (from device header) ---
@@ -25,9 +24,6 @@
 #define N_RANGE_BINS            (HIGH_RES_FFT_LEN / 2)
 #define C_MPS                   (299792458.0)
 
-// ===================================================================
-// ===         CORRECTED Range Calculation Formulas                ===
-// ===================================================================
 // R_max = (c * Fs * Tc) / (4 * B)
 #define R_MAX_M                 ((C_MPS * FS_HZ * PY_TC_S) / (4.0 * PY_F_BANDWIDTH_HZ))
 
@@ -50,6 +46,8 @@ typedef struct {
     uint32_t recalibration_interval_s;
     float near_range_bias_db;
     float far_range_bias_db;
+    float far_zone_start_m;
+    float far_zone_bias_db;
     uint8_t presence_cfar_guards;
     uint8_t presence_cfar_refs;
     uint8_t history_len;
@@ -67,6 +65,7 @@ void radar_config_set_uart_plotting(bool enable);
 void radar_config_set_frame_delay(uint32_t delay_ms);
 void radar_config_set_presence_params(float bg_alpha, uint32_t recal_interval_s);
 void radar_config_set_cfar_params(float near_bias, float far_bias, uint8_t guards, uint8_t refs);
+void radar_config_set_far_zone_params(float start_m, float bias_db);
 void radar_config_set_temporal_filter_params(uint8_t hist_len, uint8_t min_dets, float max_range_diff);
 void radar_config_set_motion_detected(bool detected);
 void radar_config_set_presence_confirmed(bool confirmed);

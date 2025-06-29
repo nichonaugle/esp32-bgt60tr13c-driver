@@ -7,7 +7,7 @@
 #include "esp_err.h"
 
 // ===================================================================
-// ===            NEW: Processing Buffer Management              ===
+// ===            Processing Buffer Management              ===
 // ===================================================================
 typedef struct {
     // --- Raw Data & Staging ---
@@ -27,9 +27,7 @@ typedef struct {
     float *hanning_window;           // Hanning window for range FFT
     float *presence_cfar_bias_array; // Linearly interpolated bias for CFAR
 
-    // --- Presence History (for temporal filtering) ---
-    // A circular buffer holding the ranges of detected targets for recent frames.
-    // Dimensions: [history_len][max_detections_per_frame]
+    // ---(for temporal filtering) ---
     float **presence_history;
     uint8_t *history_detection_counts; // Number of detections in each history frame
     int history_write_idx;             // Current position in the circular buffer
@@ -38,7 +36,7 @@ typedef struct {
 
 
 // ===================================================================
-// ===               NEW: Processing Core Functions                ===
+// ===               Processing Core Functions                ===
 // ===================================================================
 
 /**

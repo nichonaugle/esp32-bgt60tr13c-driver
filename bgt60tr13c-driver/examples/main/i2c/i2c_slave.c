@@ -30,7 +30,7 @@ static size_t prepare_tx_data(uint8_t reg, uint8_t *tx_buffer) {
         case REG_MIN_DETECTIONS: tx_buffer[0] = config->min_detections_in_history; break;
         case REG_MAX_RANGE_DIFF_M: memcpy(tx_buffer, &config->max_range_diff_m, sizeof(float)); tx_length = sizeof(float); break;
 
-        // --- NEW: Handle UART Plotting Read ---
+        // --- Handle UART Plotting Read ---
         case REG_UART_PLOTTING:
             tx_buffer[0] = config->enable_uart_plotting ? 1 : 0;
             break;
@@ -57,14 +57,14 @@ static void process_write(uint8_t reg, const uint8_t *data, size_t len) {
         case REG_MIN_DETECTIONS: radar_config_set_temporal_filter_params(config->history_len, data[0], config->max_range_diff_m); break;
         case REG_MAX_RANGE_DIFF_M: if (len >= 4) { float val; memcpy(&val, data, 4); radar_config_set_temporal_filter_params(config->history_len, config->min_detections_in_history, val); } break;
         
-        // --- NEW: Handle UART Plotting Write ---
+        // --- Handle UART Plotting Write ---
         case REG_UART_PLOTTING:
             radar_config_set_uart_plotting(data[0] != 0);
             break;
     }
 }
 
-// --- i2c_slave_task, i2c_slave_init, i2c_slave_task_create are unchanged ---
+// --- i2c_slave_task, i2c_slave_init, i2c_slave_task_create ---
 void i2c_slave_task(void *pvParameters) {
     uint8_t rx_buffer[I2C_SLAVE_RX_BUF_LEN];
     uint8_t tx_buffer[I2C_SLAVE_TX_BUF_LEN];

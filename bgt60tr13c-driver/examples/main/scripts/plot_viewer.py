@@ -9,7 +9,7 @@ import time
 # --- Configuration ---
 # =============================================================================
 # !!! IMPORTANT: Change this to the correct serial port for your ESP32 !!!
-SERIAL_PORT = '/dev/tty.SLAB_USBtoUART2'  
+SERIAL_PORT = '/dev/tty.SLAB_USBtoUART'  
 BAUD_RATE = 921600
 
 # --- Radar & Plot Parameters ---
@@ -17,10 +17,10 @@ BAUD_RATE = 921600
 C_MPS = 299792458.0
 FS_HZ = 2352941.0
 PY_TC_S = 0.00005738
-PY_F_BANDWIDTH_HZ = 2000000000.0
+PY_F_BANDWIDTH_HZ = 957000000.0
 N_RANGE_BINS = 512 
 
-# --- CORRECTED Range Calculation ---
+# --- Range Calculation ---
 MAX_RANGE_M = (C_MPS * FS_HZ * PY_TC_S) / (4.0 * PY_F_BANDWIDTH_HZ)
 print(f"INFO: Calculated plot range (MAX_RANGE_M) = {MAX_RANGE_M:.2f} m")
 
@@ -28,12 +28,12 @@ print(f"INFO: Calculated plot range (MAX_RANGE_M) = {MAX_RANGE_M:.2f} m")
 # --- Home Assistant Configuration ---
 # =============================================================================
 HA_ENABLED = True # Set to False to disable Home Assistant integration
-HA_URL = "http://homeassistant.local:8123" # <<< CHANGE THIS to your Home Assistant URL
-HA_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4MjEwMmUyNGQwMzE0YjAzODQxYTIwOGVmYWU3MzUwZSIsImlhdCI6MTc0ODkxMjQwOSwiZXhwIjoyMDY0MjcyNDA5fQ.MqYVjMpWLH-5-gSqq4g-3hNfUJjRgBmwBqen22oiSlk"  # <<< CHANGE THIS to your token
-HA_ENTITY_ID = "light.smart_multicolor_bulb" # <<< CHANGE THIS to the entity you want to control
+HA_URL = "http://homeassistant.local:8123"
+HA_TOKEN = "lol"
+HA_ENTITY_ID = "light.smart_multicolor_bulb"
 
 # How long the device should stay on (in seconds) after the last motion is detected.
-HA_OFF_DELAY_S = 300 # 300 seconds = 5 minutes
+HA_OFF_DELAY_S = 30 # 30 seconds = 0.5 minutes
 
 # =============================================================================
 # --- Global Variables ---
@@ -80,7 +80,7 @@ def get_home_assistant_entity_state():
     try:
         response = requests.get(api_url, headers=headers, timeout=5)
         response.raise_for_status()
-        return response.json().get('state') # e.g., 'on', 'off', 'unavailable'
+        return response.json().get('state')
     except requests.exceptions.RequestException as e:
         print(f"\nERROR: Could not get state from Home Assistant. Details: {e}")
         return None # Return None if we can't get the state
@@ -168,6 +168,10 @@ def read_serial_data():
                     if temp_detections is not None:
                         latest_detected_ranges = temp_detections
                         if temp_detections.size > 0:
+                            
+                            print(f"DETECTION CONFIRMED at range(s) [m]: {np.round(temp_detections, 2)}")
+                            # =======================================================
+
                             indices = np.searchsorted(range_axis, temp_detections)
                             indices = np.clip(indices, 0, N_RANGE_BINS - 1)
                             latest_detected_magnitudes = latest_range_profile[indices]
@@ -177,9 +181,6 @@ def read_serial_data():
                          latest_detected_ranges = np.array([])
                          latest_detected_magnitudes = np.array([])
 
-                    # ===================================================================
-                    # ===     NEW Home Assistant State Logic w/ State Checking        ===
-                    # ===================================================================
                     has_detection_this_frame = (latest_detected_ranges.size > 0)
 
                     if has_detection_this_frame:

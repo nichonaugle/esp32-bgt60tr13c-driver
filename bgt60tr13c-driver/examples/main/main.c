@@ -69,10 +69,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_init(SPI2_HOST, &dev_config)); 
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_configure()); 
     
-    // ===================================================================
-    // ===       ADDITIONAL CONFIGURATION FROM KNOWN-GOOD FILE         ===
-    // ===================================================================
-    ESP_LOGI(TAG, "Applying hardware settings from known-good configuration...");
+    ESP_LOGI(TAG, "Applying hardware settings...");
 
     // 1. Set FIFO_CREF to 32 samples for smaller, more frequent IRQs.
     ESP_LOGI(TAG, "Modifying SFCTL:FIFO_CREF for 32-sample IRQ threshold.");

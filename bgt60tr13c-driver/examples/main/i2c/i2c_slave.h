@@ -32,7 +32,7 @@ typedef enum {
     REG_HISTORY_LEN         = 0x40,
     REG_MIN_DETECTIONS      = 0x41,
     REG_MAX_RANGE_DIFF_M    = 0x42,
-    REG_UART_PLOTTING       = 0x50, // <-- NEW: Register to control plotting
+    REG_UART_PLOTTING       = 0x50,
 
 } i2c_register_t;
 

@@ -1,3 +1,5 @@
+// radar_config.c
+
 #include "radar_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -18,11 +20,13 @@ void radar_config_init(void) {
     g_radar_config.background_alpha = 0.001f;
     g_radar_config.recalibration_interval_s = 60;
     g_radar_config.near_range_bias_db = 3.0f;
-    g_radar_config.far_range_bias_db = 1.25f;
-    g_radar_config.presence_cfar_guards = 5;
-    g_radar_config.presence_cfar_refs = 4;
+    g_radar_config.far_range_bias_db = 1.85f;
+    g_radar_config.far_zone_start_m = 8.75f;
+    g_radar_config.far_zone_bias_db = 4.5f;
+    g_radar_config.presence_cfar_guards = 7;
+    g_radar_config.presence_cfar_refs = 8;
     g_radar_config.history_len = 3;
-    g_radar_config.min_detections_in_history = 2;
+    g_radar_config.min_detections_in_history = 3;
     g_radar_config.max_range_diff_m = 2.0f;
     g_radar_config.motion_detected = false;
     g_radar_config.presence_confirmed = false;
@@ -79,6 +83,20 @@ void radar_config_set_cfar_params(float near_bias, float far_bias, uint8_t guard
         xSemaphoreGive(config_mutex);
     }
 }
+
+// --- NEW: Implementation for the far zone setter ---
+void radar_config_set_far_zone_params(float start_m, float bias_db) {
+    if (config_mutex != NULL) {
+        xSemaphoreTake(config_mutex, portMAX_DELAY);
+    }
+    g_radar_config.far_zone_start_m = start_m;
+    g_radar_config.far_zone_bias_db = bias_db;
+    if (config_mutex != NULL) {
+        xSemaphoreGive(config_mutex);
+    }
+    ESP_LOGI(TAG, "Far zone CFAR params set: Start at %.2f m, Bias %.2f dB", start_m, bias_db);
+}
+// ---
 
 void radar_config_set_temporal_filter_params(uint8_t hist_len, uint8_t min_dets, float max_range_diff) {
     if (config_mutex != NULL) {

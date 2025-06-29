@@ -1,3 +1,5 @@
+// radar_processing.c
+
 #include "radar_processing.h"
 #include "esp_log.h"
 #include "esp_dsp.h"
@@ -87,10 +89,36 @@ esp_err_t radar_processing_init(radar_buffers_t *buffers, radar_config_t* config
     }
     dsps_fft2r_init_fc32(NULL, HIGH_RES_FFT_LEN);
     dsps_wind_hann_f32(buffers->hanning_window, N_SAMPLES_PER_CHIRP);
-    for (int i = 0; i < N_RANGE_BINS; i++) {
-        float ratio = (float)i / (float)(N_RANGE_BINS - 1);
+
+    // ===================================================================
+    // ===       NEW: Multi-Zone CFAR Bias Array Initialization        ===
+    // ===================================================================
+    ESP_LOGI(TAG, "Initializing CFAR bias zones. Near->Far until %.2f m, then fixed Far Zone bias.", config->far_zone_start_m);
+    
+    // Calculate the range bin index that corresponds to the start of the far zone
+    int far_zone_start_bin = (int)((config->far_zone_start_m / R_MAX_M) * N_RANGE_BINS);
+
+    // Clamp the value to be within the valid array bounds
+    if (far_zone_start_bin >= N_RANGE_BINS) {
+        far_zone_start_bin = N_RANGE_BINS - 1;
+    }
+    if (far_zone_start_bin < 1) { // Avoid division by zero in the loop
+        far_zone_start_bin = 1;
+    }
+
+    // Zone 1 & 2: Create a linear interpolation from near_range_bias to far_range_bias
+    // This slope extends up to the start of the final, high-bias zone.
+    for (int i = 0; i < far_zone_start_bin; i++) {
+        float ratio = (float)i / (float)(far_zone_start_bin - 1);
         buffers->presence_cfar_bias_array[i] = config->near_range_bias_db + (config->far_range_bias_db - config->near_range_bias_db) * ratio;
     }
+
+    // Zone 3: Apply the fixed, higher bias for all subsequent range bins to reject far-range noise.
+    for (int i = far_zone_start_bin; i < N_RANGE_BINS; i++) {
+        buffers->presence_cfar_bias_array[i] = config->far_zone_bias_db;
+    }
+    // ===================================================================
+    
     g_last_recalibration_time = get_time_s();
     return ESP_OK;
 }
