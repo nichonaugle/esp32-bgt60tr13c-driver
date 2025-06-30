@@ -14,6 +14,7 @@ typedef struct {
     uint16_t *raw_frame_buf;         // Holds the full, interleaved frame from the sensor
     float *stationary_data;          // Holds a single, de-interleaved, background-subtracted chirp
     float *fft_input_output;         // Buffer for in-place FFT
+    float *integrated_fft_iq;        // NEW: Buffer for coherent I/Q summation
 
     // --- Background Model ---
     float *background_model;         // Adaptive background model (M_CHIRPS x N_SAMPLES_PER_CHIRP)

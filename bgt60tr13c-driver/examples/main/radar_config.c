@@ -17,14 +17,14 @@ void radar_config_init(void) {
     config_mutex = xSemaphoreCreateMutex();
 
     g_radar_config.frame_delay_ms = 0;
-    g_radar_config.background_alpha = 0.001f;
+    g_radar_config.background_alpha = 0.01f;
     g_radar_config.recalibration_interval_s = 60;
     g_radar_config.near_range_bias_db = 3.0f;
     g_radar_config.far_range_bias_db = 1.85f;
     g_radar_config.far_zone_start_m = 8.75f;
     g_radar_config.far_zone_bias_db = 4.5f;
-    g_radar_config.presence_cfar_guards = 7;
-    g_radar_config.presence_cfar_refs = 8;
+    g_radar_config.presence_cfar_guards = 5;
+    g_radar_config.presence_cfar_refs = 6;
     g_radar_config.history_len = 3;
     g_radar_config.min_detections_in_history = 3;
     g_radar_config.max_range_diff_m = 2.0f;

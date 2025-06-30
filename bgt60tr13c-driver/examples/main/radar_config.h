@@ -20,6 +20,7 @@
 #define FS_HZ                   (2352941.0)
 
 // --- Algorithm & Tuning Parameters ---
+#define COHERENT_INTEGRATION_FACTOR (4) // Coherent integration factor (must be a divisor of M_CHIRPS)
 #define HIGH_RES_FFT_LEN        (1024)
 #define N_RANGE_BINS            (HIGH_RES_FFT_LEN / 2)
 #define C_MPS                   (299792458.0)

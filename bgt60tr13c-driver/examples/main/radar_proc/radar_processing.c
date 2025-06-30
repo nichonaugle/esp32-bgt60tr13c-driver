@@ -70,6 +70,7 @@ esp_err_t radar_processing_init(radar_buffers_t *buffers, radar_config_t* config
     buffers->raw_frame_buf = (uint16_t *)malloc(frame_size_samples * sizeof(uint16_t));
     buffers->stationary_data = (float *)malloc(N_SAMPLES_PER_CHIRP * sizeof(float));
     buffers->fft_input_output = (float *)malloc(HIGH_RES_FFT_LEN * 2 * sizeof(float));
+    buffers->integrated_fft_iq = (float *)calloc(HIGH_RES_FFT_LEN * 2, sizeof(float)); // NEW: Allocate buffer for I/Q sum
     buffers->background_model = (float *)calloc(M_CHIRPS * N_SAMPLES_PER_CHIRP, sizeof(float));
     buffers->profile_accumulator = (float *)malloc(N_RANGE_BINS * sizeof(float));
     buffers->mean_profile_db = (float *)malloc(N_RANGE_BINS * sizeof(float));
@@ -82,7 +83,7 @@ esp_err_t radar_processing_init(radar_buffers_t *buffers, radar_config_t* config
     }
     buffers->history_detection_counts = (uint8_t *)calloc(config->history_len, sizeof(uint8_t));
     buffers->history_write_idx = 0;
-    if (!buffers->raw_frame_buf || !buffers->stationary_data || !buffers->fft_input_output || !buffers->background_model || !buffers->profile_accumulator || !buffers->mean_profile_db || !buffers->cfar_threshold_db || !buffers->hanning_window || !buffers->presence_cfar_bias_array || !buffers->presence_history || !buffers->history_detection_counts) {
+    if (!buffers->raw_frame_buf || !buffers->stationary_data || !buffers->fft_input_output || !buffers->integrated_fft_iq || !buffers->background_model || !buffers->profile_accumulator || !buffers->mean_profile_db || !buffers->cfar_threshold_db || !buffers->hanning_window || !buffers->presence_cfar_bias_array || !buffers->presence_history || !buffers->history_detection_counts) {
         ESP_LOGE(TAG, "Failed to allocate one or more processing buffers!");
         radar_processing_cleanup(buffers, config);
         return ESP_ERR_NO_MEM;
@@ -90,9 +91,6 @@ esp_err_t radar_processing_init(radar_buffers_t *buffers, radar_config_t* config
     dsps_fft2r_init_fc32(NULL, HIGH_RES_FFT_LEN);
     dsps_wind_hann_f32(buffers->hanning_window, N_SAMPLES_PER_CHIRP);
 
-    // ===================================================================
-    // ===       NEW: Multi-Zone CFAR Bias Array Initialization        ===
-    // ===================================================================
     ESP_LOGI(TAG, "Initializing CFAR bias zones. Near->Far until %.2f m, then fixed Far Zone bias.", config->far_zone_start_m);
     
     // Calculate the range bin index that corresponds to the start of the far zone
@@ -125,7 +123,7 @@ esp_err_t radar_processing_init(radar_buffers_t *buffers, radar_config_t* config
 
 void radar_processing_cleanup(radar_buffers_t *buffers, radar_config_t* config) {
     if(buffers == NULL) return;
-    free(buffers->raw_frame_buf); free(buffers->stationary_data); free(buffers->fft_input_output); free(buffers->background_model); free(buffers->profile_accumulator); free(buffers->mean_profile_db); free(buffers->cfar_threshold_db); free(buffers->hanning_window); free(buffers->presence_cfar_bias_array);
+    free(buffers->raw_frame_buf); free(buffers->stationary_data); free(buffers->fft_input_output); free(buffers->integrated_fft_iq); free(buffers->background_model); free(buffers->profile_accumulator); free(buffers->mean_profile_db); free(buffers->cfar_threshold_db); free(buffers->hanning_window); free(buffers->presence_cfar_bias_array);
     if (buffers->presence_history) { if(config != NULL) { for (int i = 0; i < config->history_len; i++) { free(buffers->presence_history[i]); } } free(buffers->presence_history); }
     free(buffers->history_detection_counts);
 }
@@ -136,9 +134,6 @@ bool radar_processing_get_presence_state(void) { return g_confirmed_presence_sta
 void process_radar_frame(radar_buffers_t *buffers, radar_config_t* config, uint32_t frame_count) {
     // Check if it's time to recalibrate the background model
     if (g_force_recalibration_flag || (get_time_s() - g_last_recalibration_time > config->recalibration_interval_s)) {
-        // ===================================================================
-        // ===            ADDED CONFIRMATION LOG MESSAGE                   ===
-        // ===================================================================
         ESP_LOGI(TAG, "Recalibration triggered. Resetting background model.");
         // ===================================================================
         g_background_initialized = false;
@@ -161,32 +156,59 @@ void process_radar_frame(radar_buffers_t *buffers, radar_config_t* config, uint3
 
     memset(buffers->profile_accumulator, 0, N_RANGE_BINS * sizeof(float));
 
-    for (int c = 0; c < M_CHIRPS; c++) {
-        for (int s = 0; s < N_SAMPLES_PER_CHIRP; s++) {
-            float raw_sample = (float)buffers->raw_frame_buf[(c * N_SAMPLES_PER_CHIRP + s) * NUM_RX_ANTENNAS];
-            float* bg_sample = &buffers->background_model[c * N_SAMPLES_PER_CHIRP + s];
-            buffers->stationary_data[s] = raw_sample - *bg_sample;
-            *bg_sample = (1.0f - config->background_alpha) * (*bg_sample) + config->background_alpha * raw_sample;
+
+    // Coherent Integration Processing Loop
+    // The number of integrated chirp-sets
+    const int num_integrated_chirps = M_CHIRPS / COHERENT_INTEGRATION_FACTOR;
+
+    for (int i = 0; i < num_integrated_chirps; i++) {
+        memset(buffers->integrated_fft_iq, 0, HIGH_RES_FFT_LEN * 2 * sizeof(float));
+
+        // Process and sum a chunk of chirps
+        for (int j = 0; j < COHERENT_INTEGRATION_FACTOR; j++) {
+            int c = i * COHERENT_INTEGRATION_FACTOR + j; // Current chirp index (0 to M_CHIRPS-1)
+
+            // --- Background Subtraction & Windowing ---
+            for (int s = 0; s < N_SAMPLES_PER_CHIRP; s++) {
+                float raw_sample = (float)buffers->raw_frame_buf[(c * N_SAMPLES_PER_CHIRP + s) * NUM_RX_ANTENNAS];
+                float* bg_sample = &buffers->background_model[c * N_SAMPLES_PER_CHIRP + s];
+                buffers->stationary_data[s] = raw_sample - *bg_sample;
+                *bg_sample = (1.0f - config->background_alpha) * (*bg_sample) + config->background_alpha * raw_sample;
+            }
+            dsps_mul_f32_ae32(buffers->stationary_data, buffers->hanning_window, buffers->stationary_data, N_SAMPLES_PER_CHIRP, 1, 1, 1);
+
+            // --- Prepare for FFT ---
+            for (int s = 0; s < N_SAMPLES_PER_CHIRP; s++) {
+                buffers->fft_input_output[2 * s] = buffers->stationary_data[s]; // Real part
+                buffers->fft_input_output[2 * s + 1] = 0;                      // Imaginary part
+            }
+            memset(&buffers->fft_input_output[2 * N_SAMPLES_PER_CHIRP], 0, (HIGH_RES_FFT_LEN - N_SAMPLES_PER_CHIRP) * 2 * sizeof(float));
+            
+            // --- Perform Range FFT ---
+            dsps_fft2r_fc32(buffers->fft_input_output, HIGH_RES_FFT_LEN);
+            dsps_bit_rev_fc32(buffers->fft_input_output, HIGH_RES_FFT_LEN);
+            
+            // --- Coherently Add I/Q data to the accumulator ---
+            for (int k = 0; k < HIGH_RES_FFT_LEN * 2; k++) {
+                buffers->integrated_fft_iq[k] += buffers->fft_input_output[k];
+            }
         }
-        dsps_mul_f32_ae32(buffers->stationary_data, buffers->hanning_window, buffers->stationary_data, N_SAMPLES_PER_CHIRP, 1, 1, 1);
-        
-        for (int s = 0; s < N_SAMPLES_PER_CHIRP; s++) {
-            buffers->fft_input_output[2 * s] = buffers->stationary_data[s];
-            buffers->fft_input_output[2 * s + 1] = 0;
-        }
-        memset(&buffers->fft_input_output[2 * N_SAMPLES_PER_CHIRP], 0, (HIGH_RES_FFT_LEN - N_SAMPLES_PER_CHIRP) * 2 * sizeof(float));
-        
-        dsps_fft2r_fc32(buffers->fft_input_output, HIGH_RES_FFT_LEN);
-        dsps_bit_rev_fc32(buffers->fft_input_output, HIGH_RES_FFT_LEN);
-        
+
+        // --- Calculate Magnitude from the integrated I/Q data ---
+        // This is done only ONCE per chunk of integrated chirps.
         for (int k = 0; k < N_RANGE_BINS; k++) {
-            float mag = sqrtf(buffers->fft_input_output[2*k] * buffers->fft_input_output[2*k] + buffers->fft_input_output[2*k+1] * buffers->fft_input_output[2*k+1]);
-            buffers->profile_accumulator[k] += mag; // Accumulate magnitude across chirps
+            float I = buffers->integrated_fft_iq[2*k];
+            float Q = buffers->integrated_fft_iq[2*k+1];
+            float mag = sqrtf(I * I + Q * Q);
+            buffers->profile_accumulator[k] += mag; // Accumulate magnitude of the integrated chunk
         }
     }
+    // ===================================================================
 
+    // --- Final Averaging ---
+    // Average the profile over the number of integrated chirps
     for (int k = 0; k < N_RANGE_BINS; k++) {
-        float mean_magnitude = buffers->profile_accumulator[k] / M_CHIRPS;
+        float mean_magnitude = buffers->profile_accumulator[k] / num_integrated_chirps;
         buffers->mean_profile_db[k] = 20.0f * log10f(mean_magnitude + 1e-10f);
     }
     

@@ -27,7 +27,7 @@ print(f"INFO: Calculated plot range (MAX_RANGE_M) = {MAX_RANGE_M:.2f} m")
 # =============================================================================
 # --- Home Assistant Configuration ---
 # =============================================================================
-HA_ENABLED = True # Set to False to disable Home Assistant integration
+HA_ENABLED = False # Set to False to disable Home Assistant integration
 HA_URL = "http://homeassistant.local:8123"
 HA_TOKEN = "lol"
 HA_ENTITY_ID = "light.smart_multicolor_bulb"
