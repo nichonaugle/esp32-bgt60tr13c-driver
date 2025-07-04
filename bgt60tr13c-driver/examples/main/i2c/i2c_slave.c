@@ -15,12 +15,18 @@ static size_t prepare_tx_data(uint8_t reg, uint8_t *tx_buffer) {
     size_t tx_length = 1;
 
     switch (reg) {
-        // --- Existing cases ---
+        // --- State Registers ---
         case REG_TEST_MODE_STATUS: tx_buffer[0] = I2C_TEST_MODE_ENABLED; break;
         case REG_MOTION_DETECTED: tx_buffer[0] = radar_config_get_motion_detected_safe() ? 1 : 0; break;
         case REG_PRESENCE_CONFIRMED: tx_buffer[0] = radar_config_get_presence_confirmed_safe() ? 1 : 0; break;
+        case REG_OCCUPANCY_STATE: tx_buffer[0] = radar_config_get_occupancy_state_safe() ? 1 : 0; break;
         case REG_SYSTEM_STATUS: tx_buffer[0] = 0x01; break;
+
+        // --- Control & Tuning Registers ---
         case REG_FRAME_DELAY_MS: memcpy(tx_buffer, &config->frame_delay_ms, sizeof(uint32_t)); tx_length = sizeof(uint32_t); break;
+        case REG_OCCUPANCY_DELAY_S: memcpy(tx_buffer, &config->occupancy_delay_s, sizeof(uint16_t)); tx_length = sizeof(uint16_t); break;
+        case REG_COHERENT_INT_FACTOR: tx_buffer[0] = config->coherent_integration_factor; break;
+        case REG_MOVING_AVG_WINDOW: tx_buffer[0] = config->moving_avg_window_size; break;
         case REG_BACKGROUND_ALPHA: memcpy(tx_buffer, &config->background_alpha, sizeof(float)); tx_length = sizeof(float); break;
         case REG_CFAR_NEAR_BIAS_DB: memcpy(tx_buffer, &config->near_range_bias_db, sizeof(float)); tx_length = sizeof(float); break;
         case REG_CFAR_FAR_BIAS_DB: memcpy(tx_buffer, &config->far_range_bias_db, sizeof(float)); tx_length = sizeof(float); break;
@@ -29,11 +35,7 @@ static size_t prepare_tx_data(uint8_t reg, uint8_t *tx_buffer) {
         case REG_HISTORY_LEN: tx_buffer[0] = config->history_len; break;
         case REG_MIN_DETECTIONS: tx_buffer[0] = config->min_detections_in_history; break;
         case REG_MAX_RANGE_DIFF_M: memcpy(tx_buffer, &config->max_range_diff_m, sizeof(float)); tx_length = sizeof(float); break;
-
-        // --- Handle UART Plotting Read ---
-        case REG_UART_PLOTTING:
-            tx_buffer[0] = config->enable_uart_plotting ? 1 : 0;
-            break;
+        case REG_UART_PLOTTING: tx_buffer[0] = config->enable_uart_plotting ? 1 : 0; break;
 
         default: tx_buffer[0] = 0xFF; break; // Error: Unknown register
     }
@@ -45,8 +47,10 @@ static void process_write(uint8_t reg, const uint8_t *data, size_t len) {
     if (len == 0) return; // No data to process
 
     switch (reg) {
-        // --- Existing cases ---
         case REG_FRAME_DELAY_MS: if (len >= 4) { uint32_t val; memcpy(&val, data, 4); radar_config_set_frame_delay(val); } break;
+        case REG_OCCUPANCY_DELAY_S: if (len >= 2) { uint16_t val; memcpy(&val, data, 2); radar_config_set_occupancy_delay(val); } break;
+        case REG_COHERENT_INT_FACTOR: radar_config_set_processing_params(data[0], config->moving_avg_window_size); break;
+        case REG_MOVING_AVG_WINDOW: radar_config_set_processing_params(config->coherent_integration_factor, data[0]); break;
         case REG_BACKGROUND_ALPHA: if (len >= 4) { float val; memcpy(&val, data, 4); radar_config_set_presence_params(val, config->recalibration_interval_s); } break;
         case REG_RECALIBRATE_NOW: if(I2C_TEST_MODE_ENABLED == 0) radar_processing_recalibrate_now(); break;
         case REG_CFAR_NEAR_BIAS_DB: if (len >= 4) { float val; memcpy(&val, data, 4); radar_config_set_cfar_params(val, config->far_range_bias_db, config->presence_cfar_guards, config->presence_cfar_refs); } break;
@@ -56,15 +60,10 @@ static void process_write(uint8_t reg, const uint8_t *data, size_t len) {
         case REG_HISTORY_LEN: radar_config_set_temporal_filter_params(data[0], config->min_detections_in_history, config->max_range_diff_m); break;
         case REG_MIN_DETECTIONS: radar_config_set_temporal_filter_params(config->history_len, data[0], config->max_range_diff_m); break;
         case REG_MAX_RANGE_DIFF_M: if (len >= 4) { float val; memcpy(&val, data, 4); radar_config_set_temporal_filter_params(config->history_len, config->min_detections_in_history, val); } break;
-        
-        // --- Handle UART Plotting Write ---
-        case REG_UART_PLOTTING:
-            radar_config_set_uart_plotting(data[0] != 0);
-            break;
+        case REG_UART_PLOTTING: radar_config_set_uart_plotting(data[0] != 0); break;
     }
 }
 
-// --- i2c_slave_task, i2c_slave_init, i2c_slave_task_create ---
 void i2c_slave_task(void *pvParameters) {
     uint8_t rx_buffer[I2C_SLAVE_RX_BUF_LEN];
     uint8_t tx_buffer[I2C_SLAVE_TX_BUF_LEN];

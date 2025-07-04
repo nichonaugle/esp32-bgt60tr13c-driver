@@ -59,12 +59,8 @@ void radar_acquisition_task(void *pvParameters) {
 
             ESP_ERROR_CHECK(xensiv_bgt60tr13c_start_frame_capture());
 
-            // ===================================================================
-            // ===          CRITICAL TIMING FIX FROM KNOWN-GOOD FILE           ===
-            // ===================================================================
             // Allow radar time for PLL stabilization and chirp sequence start up.
             vTaskDelay(pdMS_TO_TICKS(100));
-            // ===================================================================
 
             uint32_t current_idx = 0;
             bool frame_collection_error = false;
@@ -117,9 +113,8 @@ void radar_acquisition_task(void *pvParameters) {
             ESP_LOGD(TAG, "Resetting FIFO post-frame.");
             ESP_ERROR_CHECK(xensiv_bgt60tr13c_soft_reset(XENSIV_BGT60TR13C_RESET_FIFO));
             
-            // Allow a brief moment for hardware to settle after FIFO reset.
+            // Allow hardware to settle after FIFO reset.
             vTaskDelay(pdMS_TO_TICKS(20));
-            // ===================================================================
 
             ESP_LOGI(TAG, "Frame acquisition cycle complete.");
         }

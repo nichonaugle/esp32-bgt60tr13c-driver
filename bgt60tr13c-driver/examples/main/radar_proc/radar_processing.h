@@ -6,15 +6,13 @@
 #include "radar_config.h"
 #include "esp_err.h"
 
-// ===================================================================
-// ===            Processing Buffer Management              ===
-// ===================================================================
+// Processing Buffer Management
 typedef struct {
     // --- Raw Data & Staging ---
     uint16_t *raw_frame_buf;         // Holds the full, interleaved frame from the sensor
     float *stationary_data;          // Holds a single, de-interleaved, background-subtracted chirp
     float *fft_input_output;         // Buffer for in-place FFT
-    float *integrated_fft_iq;        // NEW: Buffer for coherent I/Q summation
+    float *integrated_fft_iq;        // Buffer for coherent I/Q summation
 
     // --- Background Model ---
     float *background_model;         // Adaptive background model (M_CHIRPS x N_SAMPLES_PER_CHIRP)
@@ -36,9 +34,7 @@ typedef struct {
 } radar_buffers_t;
 
 
-// ===================================================================
-// ===               Processing Core Functions                ===
-// ===================================================================
+// Processing Functions
 
 /**
  * @brief Allocates and initializes all required processing buffers and states.

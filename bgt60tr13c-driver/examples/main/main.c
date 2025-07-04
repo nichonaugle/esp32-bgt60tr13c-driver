@@ -19,6 +19,8 @@ void i2c_test_mode_task(void *pvParameters) {
     ESP_LOGI(TAG, "I2C Test Mode Task Started. Simulating presence events.");
     bool simulated_presence = false;
     for (;;) {
+        // In test mode, we toggle the raw 'presence_confirmed' state.
+        // The occupancy task will then apply the time delay logic to this.
         simulated_presence = !simulated_presence;
         radar_config_set_presence_confirmed(simulated_presence);
         radar_config_set_motion_detected(simulated_presence);
@@ -32,9 +34,14 @@ void i2c_test_mode_task(void *pvParameters) {
 void app_main(void) {
     ESP_LOGI(TAG, "=== BGT60TR13C Radar System Starting ===");
     
+    // Initialize configuration defaults
     radar_config_init();
     
+    // Initialize the GPIO pin for interrupting the I2C master
     ESP_ERROR_CHECK(radar_config_init_interrupt_pin());
+
+    // Start the task that manages the occupancy state and timer
+    occupancy_management_task_create();
     
     #if I2C_TEST_MODE_ENABLED == 1
         ESP_LOGI(TAG, "=== I2C TEST MODE ENABLED ===");
@@ -42,6 +49,7 @@ void app_main(void) {
         i2c_slave_task_create();
         xTaskCreate(i2c_test_mode_task, "i2c_test_task", 2048, NULL, 5, NULL);
         ESP_LOGI(TAG, "Test Mode Initialization Complete. Halting main task.");
+        // The occupancy task will continue to run in the background.
         for (;;) { vTaskDelay(portMAX_DELAY); }
         return;
     #endif
@@ -71,19 +79,18 @@ void app_main(void) {
     
     ESP_LOGI(TAG, "Applying hardware settings...");
 
-    // 1. Set FIFO_CREF to 32 samples for smaller, more frequent IRQs.
+    // Set FIFO_CREF to 32 samples for smaller, more frequent IRQs.
     ESP_LOGI(TAG, "Modifying SFCTL:FIFO_CREF for 32-sample IRQ threshold.");
     uint32_t sfctl_val = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_SFCTL);
     uint32_t new_sfctl_data = (sfctl_val & ~0x1FFFU) | 0x020U;  // 0x20 = 32 samples
     ESP_ERROR_CHECK(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_SFCTL, new_sfctl_data, true));
 
-    // 2. Set MAX_FRAME_CNT to 1 for single-shot frame capture.
-    //    This stops the radar after one frame, preventing continuous data streaming.
+    // Set MAX_FRAME_CNT to 1 for single-shot frame capture.
+    // This stops the radar after one frame, preventing continuous data streaming.
     ESP_LOGI(TAG, "Setting CCR2:MAX_FRAME_CNT for single-frame capture.");
     uint32_t ccr2_val_read = xensiv_bgt60tr13c_get_reg(XENSIV_BGT60TR13C_REG_CCR2);
     uint32_t ccr2_to_write = (ccr2_val_read & 0xFFFFF000) | 0x00000001;
-    ESP_ERROR_CHECK(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_CCR2, ccr2_to_write, true)); 
-    // ===================================================================
+    ESP_ERROR_CHECK(xensiv_bgt60tr13c_set_reg(XENSIV_BGT60TR13C_REG_CCR2, ccr2_to_write, true));
 
     ESP_LOGI(TAG, "=== Radar System Configuration Loaded ===");
     ESP_LOGI(TAG, "Frame delay set to: %lu ms", config->frame_delay_ms);
