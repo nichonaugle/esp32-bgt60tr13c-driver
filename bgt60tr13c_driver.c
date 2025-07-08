@@ -230,7 +230,8 @@ uint32_t xensiv_bgt60tr13c_get_reg(uint32_t reg_addr) {
     /* GSR0 error code logging */
     ESP_ERROR_CHECK_WITHOUT_ABORT(xensiv_bgt60tr13c_check_gsr0_err(t.rx_data[0]));
 
-    return (t.rx_data[0] << 24) | (t.rx_data[1] << 16) | (t.rx_data[2] << 8) | t.rx_data[3];
+    // Skip GSR0 byte (t.rx_data[0]) and only return the 24-bit register data
+    return (t.rx_data[1] << 16) | (t.rx_data[2] << 8) | t.rx_data[3];
 }
 
 esp_err_t xensiv_bgt60tr13c_soft_reset(xensiv_bgt60tr13c_reset_t reset_type) {
@@ -300,4 +301,70 @@ esp_err_t xensiv_bgt60tr13c_check_gsr0_err(uint8_t gsr0_err_code) {
     }
 
     return ret;
+}
+
+esp_err_t xensiv_bgt60tr13c_read_back_registers(void) {
+    ESP_LOGI(TAG, "=== Reading Back All Configured Registers ===");
+    
+    for(uint8_t reg_idx = 0; reg_idx < XENSIV_BGT60TR13C_CONF_NUM_REGS; reg_idx++) {
+        uint32_t expected_val = radar_init_register_list[reg_idx];
+        uint32_t reg_addr = ((expected_val & XENSIV_BGT60TR13C_SPI_REGADR_MSK) >>
+                                XENSIV_BGT60TR13C_SPI_REGADR_POS);
+        uint32_t expected_data = ((expected_val & XENSIV_BGT60TR13C_SPI_DATA_MSK) >>
+                                    XENSIV_BGT60TR13C_SPI_DATA_POS);
+        
+        uint32_t actual_data = xensiv_bgt60tr13c_get_reg(reg_addr);
+        
+        ESP_LOGI(TAG, "Reg[0x%02lX]: Expected=0x%06lX, Actual=0x%06lX %s", 
+                 reg_addr, expected_data, actual_data, 
+                 (expected_data == actual_data) ? "✓" : "✗");
+        
+        // Small delay to prevent overwhelming the log
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
+    ESP_LOGI(TAG, "=== Register Readback Complete ===");
+    return ESP_OK;
+}
+
+esp_err_t xensiv_bgt60tr13c_verify_configuration(void) {
+    ESP_LOGI(TAG, "=== Verifying Configuration ===");
+    
+    uint32_t mismatched_registers = 0;
+    
+    for(uint8_t reg_idx = 0; reg_idx < XENSIV_BGT60TR13C_CONF_NUM_REGS; reg_idx++) {
+        uint32_t expected_val = radar_init_register_list[reg_idx];
+        uint32_t reg_addr = ((expected_val & XENSIV_BGT60TR13C_SPI_REGADR_MSK) >>
+                                XENSIV_BGT60TR13C_SPI_REGADR_POS);
+        uint32_t expected_data = ((expected_val & XENSIV_BGT60TR13C_SPI_DATA_MSK) >>
+                                    XENSIV_BGT60TR13C_SPI_DATA_POS);
+        
+        uint32_t actual_data = xensiv_bgt60tr13c_get_reg(reg_addr);
+        
+        if (expected_data != actual_data) {
+            ESP_LOGE(TAG, "MISMATCH Reg[0x%02lX]: Expected=0x%06lX, Actual=0x%06lX", 
+                     reg_addr, expected_data, actual_data);
+            mismatched_registers++;
+        }
+    }
+    
+    if (mismatched_registers == 0) {
+        ESP_LOGI(TAG, "All %d registers match expected values", XENSIV_BGT60TR13C_CONF_NUM_REGS);
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "%lu registers do not match expected values", mismatched_registers);
+        return ESP_ERR_INVALID_STATE;
+    }
+}
+
+esp_err_t xensiv_bgt60tr13c_read_specific_registers(const uint32_t *reg_addresses, uint32_t num_regs) {
+    ESP_LOGI(TAG, "=== Reading Specific Registers ===");
+    
+    for(uint32_t i = 0; i < num_regs; i++) {
+        uint32_t reg_addr = reg_addresses[i];
+        uint32_t reg_data = xensiv_bgt60tr13c_get_reg(reg_addr);
+        ESP_LOGI(TAG, "Reg[0x%02lX] = 0x%06lX", reg_addr, reg_data);
+    }
+    
+    return ESP_OK;
 }
