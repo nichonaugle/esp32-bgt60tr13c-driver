@@ -1,206 +1,192 @@
 import serial
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.fft import fft, fft2, fftshift
+from scipy.fft import fft
 from scipy.constants import c
-from matplotlib.gridspec import GridSpec
-from scipy.ndimage import label
 import time
-from collections import deque # To maintain detection history
+from collections import deque
 
 # =============================================================================
 # Algorithm & Tuning Parameters
 # =============================================================================
 # --- General ---
-HIGH_RES_FFT_LEN = 1024 # FFT length for the high-resolution range profile
-NUM_FRAMES_TO_AVERAGE = 1 # Number of frames to average for smoothing
+HIGH_RES_FFT_LEN = 1024
+CHIRPS_PER_FRAME = 64
 
-# --- Stationary Target Detection ---
-BACKGROUND_ALPHA = 0.05 # Learning rate for background model (lower is slower)
-RECALIBRATION_INTERVAL_S = 60 # How often to force a background reset
+# --- Presence Detection (Phase Analysis) ---
+PRESENCE_HISTORY_LEN = 8
+PRESENCE_MAG_THRESHOLD = 500
+PRESENCE_PHASE_STD_THRESHOLD = 0.32
 
-# --- 1D CFAR (Presence Detection) ---
-PRESENCE_CFAR_GUARDS = 2 # Guard cells for stationary detection
-PRESENCE_CFAR_REFS = 5   # Reference (training) cells
-PRESENCE_CFAR_BIAS = 1.25 # Sensitivity bias in dB (higher is less sensitive)
-
-# --- 2D CFAR (Motion Detection) ---
-MOTION_CFAR_GUARDS = 4 # Guard cells for motion detection
-MOTION_CFAR_REFS = 6   # Reference (training) cells
-MOTION_CFAR_PFA = 0.01 # Probability of False Alarm
-
-# --- Temporal Filter (False Alarm Rejection) ---
-HISTORY_LEN = 3 # Number of frames to look back on
-MIN_DETECTIONS_IN_HISTORY = 2 # How many detections are needed to confirm a real target
-MAX_RANGE_DIFF_M = 2.0 # Max range difference between detections in history to be considered the same target
-
-# =============================================================================
-# Core Functions (CFAR, Temporal Check)
-# =============================================================================
-def cfar_fast_1d(x_db, num_ref_cells, num_guard_cells, bias_db):
-    pad = int(num_ref_cells + num_guard_cells)
-    if x_db.size < (2 * pad + 1): return np.full_like(x_db, np.nan)
-    all_windows = np.lib.stride_tricks.sliding_window_view(x_db, (num_ref_cells * 2) + (num_guard_cells * 2) + 1)
-    indices_to_delete = np.arange(num_ref_cells, num_ref_cells + (num_guard_cells * 2) + 1)
-    reference_cells = np.delete(all_windows, indices_to_delete, axis=1)
-    noise_floor_estimate = np.mean(reference_cells, axis=1)
-    thresholds = np.pad(noise_floor_estimate, (pad, pad), constant_values=np.nan)
-    return thresholds + bias_db
-
-def ca_cfar_2d(rd_map, training_cells, guard_cells, pfa):
-    num_ranges, num_doppler_bins = rd_map.shape
-    num_training_cells = 2 * training_cells
-    alpha = num_training_cells * (pfa ** (-1 / num_training_cells) - 1)
-    detection_mask = np.zeros_like(rd_map, dtype=bool)
-    for r in range(num_ranges):
-        for i in range(training_cells + guard_cells, num_doppler_bins - (training_cells + guard_cells)):
-            cut = rd_map[r, i]
-            noise_floor_lead = np.sum(rd_map[r, i - training_cells - guard_cells : i - guard_cells])
-            noise_floor_lag = np.sum(rd_map[r, i + guard_cells + 1 : i + guard_cells + training_cells + 1])
-            noise_floor_avg = (noise_floor_lead + noise_floor_lag) / num_training_cells
-            threshold = alpha * noise_floor_avg
-            if cut > threshold: detection_mask[r, i] = True
-    return detection_mask
-
-def check_temporal_filter(history, max_range_diff):
-    """Checks if there are enough recent detections within a certain range tolerance."""
-    # Get all frames in history that had at least one detection
-    frames_with_detections = [frame_detections for frame_detections in history if frame_detections]
-    
-    # Check if we have enough recent detections
-    if len(frames_with_detections) < MIN_DETECTIONS_IN_HISTORY:
-        return False
-    
-    # Check if any detection in the most recent frame is close to any detection in other recent frames
-    latest_detections = frames_with_detections[-1]
-    past_detections_flat = [item for sublist in frames_with_detections[:-1] for item in sublist]
-
-    for latest_det in latest_detections:
-        for past_det in past_detections_flat:
-            if abs(latest_det - past_det) <= max_range_diff:
-                return True # Found a match, confirm detection
-    return False
+# --- Presence Confirmation Logic ---
+# This logic prevents false positives by requiring detections to be consistent
+# over time and space before confirming a "presence".
+MIN_HITS_FOR_CONFIRMATION = 3      # How many detections in a row are needed to confirm presence.
+MAX_FRAME_GAP_ALLOWED = 2          # How many frames can be missed before the hit counter resets.
+MAX_RANGE_DIFFERENCE_METERS = 1.5  # Max distance (m) a detection can move between frames to be part of the same event.
 
 # =============================================================================
 # Radar Parameters and Setup
 # =============================================================================
-f_low = 59479900000; f_high = 61479900000; f_bandwidth = abs(f_high-f_low)
-Tc = 0.00005738; shape_end_delay = 0.000690; sample_rate = 2352941
-PRT = shape_end_delay + Tc; samples_per_chirp = 128; chirps_per_frame = 64
+f_low = 59479900000
+f_high = 60436900000
+f_center = (f_low + f_high) / 2
+f_bandwidth = abs(f_high - f_low)
+sample_rate = 2352941
+samples_per_chirp = 128
+Tc = samples_per_chirp / sample_rate
+PRT = 0.000690325
 
 r_max = (sample_rate * c * Tc) / (4 * f_bandwidth)
-v_max =  c / (2 * f_bandwidth * PRT)
-high_res_range_axis = np.linspace(0, r_max, HIGH_RES_FFT_LEN // 2)
-low_res_range_axis = np.linspace(0, r_max, samples_per_chirp // 2)
+range_axis = np.linspace(0, r_max, HIGH_RES_FFT_LEN // 2)
 
-ser = serial.Serial('/dev/tty.SLAB_USBtoUART2', 921600)
+# --- Serial and Plotting Setup ---
+try:
+    ser = serial.Serial('/dev/tty.SLAB_USBtoUART5', 921600, timeout=1)
+except serial.SerialException as e:
+    print(f"Error opening serial port: {e}")
+    exit()
 
-# --- Plotting Setup ---
 plt.ion()
-fig, (ax_main, ax_presence) = plt.subplots(2, 1, figsize=(10, 10), gridspec_kw={'height_ratios': [3, 2]})
+fig, ax_presence = plt.subplots(figsize=(12, 6))
 
-im = ax_main.imshow(np.zeros((samples_per_chirp // 2, chirps_per_frame)), aspect='auto', 
-                    extent=[-v_max/2, v_max/2, 0, r_max], origin='lower', vmin=-50, vmax=30)
-fig.colorbar(im, ax=ax_main)
-ax_main.set_title("Motion Detection Map"); ax_main.set_xlabel("Velocity (m/s)"); ax_main.set_ylabel("Range (m)")
-
-ax_presence.set_title("Presence Detection (Stationary Targets)"); ax_presence.set_xlabel("Range (m)")
-ax_presence.set_ylabel("Magnitude (dB)"); ax_presence.set_xlim([0, r_max]); ax_presence.grid(True)
-line_stationary_profile, = ax_presence.plot(high_res_range_axis, np.zeros_like(high_res_range_axis), c='g', lw=1.0, label='Stationary Profile')
-line_stationary_thresh, = ax_presence.plot(high_res_range_axis, np.zeros_like(high_res_range_axis), c='y', lw=1.5, ls='--', label='CFAR Threshold')
-line_stationary_targets, = ax_presence.plot([], [], 'ro', markersize=8, label='Presence Detected')
+ax_presence.set_title("Presence Detection via Phase Fluctuation Analysis")
+ax_presence.set_xlabel("Range (m)")
+ax_presence.set_ylabel("Phase Standard Deviation (Radians)")
+ax_presence.set_xlim([0, r_max])
+ax_presence.grid(True)
+line_phase_std, = ax_presence.plot(range_axis, np.zeros_like(range_axis), c='cyan', lw=2, label='Phase Std Dev')
+line_phase_thresh = ax_presence.axhline(PRESENCE_PHASE_STD_THRESHOLD, color='r', ls='--', lw=1.5, label='Detection Threshold')
+presence_detections_scatter = ax_presence.scatter([], [], c='orange', s=120, zorder=10, label='Raw Detection')
+# Add a new text element for the confirmation status
+confirmation_text = ax_presence.text(0.5, 0.95, 'STATUS: NO PRESENCE', ha='center', va='top',
+                                     transform=ax_presence.transAxes, fontsize=14,
+                                     bbox=dict(boxstyle='round,pad=0.3', fc='lightgray', alpha=0.5))
 ax_presence.legend(loc="upper right")
+fig.tight_layout()
 
 # --- Processing Variables ---
-accumulated_rd_map = np.zeros((samples_per_chirp // 2, chirps_per_frame))
-frame_count = 0; background_model = None
-last_recalibration_time = time.time()
-presence_history = deque(maxlen=HISTORY_LEN)
-motion_history = deque(maxlen=HISTORY_LEN)
+presence_history = deque(maxlen=PRESENCE_HISTORY_LEN)
+frame_counter = 0
+
+# State variables for the new confirmation logic
+confirmation_hits = 0
+last_detection_frame = -1
+last_detection_range = 0.0
+presence_confirmed = False
 
 # =============================================================================
 # Main Processing Loop
 # =============================================================================
+print("Starting radar processing loop... Press Ctrl+C to stop.")
 while True:
     try:
-        if time.time() - last_recalibration_time > RECALIBRATION_INTERVAL_S:
-            print(f"\n--- Recalibrating background model ({RECALIBRATION_INTERVAL_S}s elapsed) ---\n")
-            background_model = None; last_recalibration_time = time.time()
-
         line = ser.readline().decode().strip()
-        if not line.startswith('Frame'): continue
+        if not line.startswith('Frame'):
+            continue
         
+        frame_counter += 1
         data_str = line.split(':', 1)[1].strip()
-        data = eval(data_str) if '[' in data_str else None
-        if not data or len(data) < chirps_per_frame * samples_per_chirp: continue
+        data = [float(x) for x in data_str.strip('[]').split(',') if x]
         
-        raw_data = np.array([float(x) for x in data], dtype=np.float32).reshape((chirps_per_frame, samples_per_chirp))
+        if not data or len(data) < CHIRPS_PER_FRAME * samples_per_chirp:
+            continue
 
-        # --- PATH A: Moving Target Processing ---
-        moving_target_data = raw_data - np.mean(raw_data, axis=0)
-        
-        # --- PATH B: Stationary Target Processing ---
-        if background_model is None: background_model = np.copy(raw_data)
-        stationary_target_data = raw_data - background_model
-        background_model = (1 - BACKGROUND_ALPHA) * background_model + BACKGROUND_ALPHA * raw_data
-        
-        # --- Windowing and FFT Processing ---
-        windowed_moving_data = moving_target_data * np.hanning(samples_per_chirp)
-        windowed_stationary_data = stationary_target_data * np.hanning(samples_per_chirp)
-        
-        rd_map_2d = fft2(windowed_moving_data.T, s=(samples_per_chirp, chirps_per_frame))
-        rd_moving = fftshift(np.abs(rd_map_2d), axes=(1,))[0:samples_per_chirp // 2, :]
-        
-        accumulated_rd_map += rd_moving; frame_count += 1
+        raw_data = np.array(data, dtype=np.float32).reshape((CHIRPS_PER_FRAME, samples_per_chirp))
 
-        if frame_count >= NUM_FRAMES_TO_AVERAGE:
-            averaged_rd_map = accumulated_rd_map / NUM_FRAMES_TO_AVERAGE
+        # --- Standard Processing Steps ---
+        range_ffts = fft(raw_data * np.hanning(samples_per_chirp), n=HIGH_RES_FFT_LEN, axis=1)
+        coherently_integrated_profile = np.mean(range_ffts[:, :HIGH_RES_FFT_LEN // 2], axis=0)
+        presence_history.append(coherently_integrated_profile)
 
-            # --- Motion Detection Logic ---
-            moving_detection_mask = ca_cfar_2d(averaged_rd_map, MOTION_CFAR_REFS, MOTION_CFAR_GUARDS, MOTION_CFAR_PFA)
-            labeled_array, num_features = label(moving_detection_mask)
+        detected_indices = [] # Default to no detections
+        if len(presence_history) == PRESENCE_HISTORY_LEN:
+            history_matrix = np.array(presence_history)
+            unwrapped_phases = np.unwrap(np.angle(history_matrix), axis=0)
+            phase_std_dev = np.std(unwrapped_phases, axis=0)
+            avg_magnitude = np.mean(np.abs(history_matrix), axis=0)
             
-            current_motion_ranges = []
-            if num_features > 0:
-                for i in range(1, num_features + 1):
-                    cluster_indices = np.argwhere(labeled_array == i)
-                    center_range_bin = cluster_indices[:, 0].mean()
-                    current_motion_ranges.append(center_range_bin * (r_max / (samples_per_chirp / 2)))
-            motion_history.append(current_motion_ranges)
-            motion_confirmed = check_temporal_filter(motion_history, MAX_RANGE_DIFF_M)
-
-            rd_log = 20 * np.log10(averaged_rd_map + 1e-10)
-            vmin, vmax = im.get_clim()
-            motion_map = np.full_like(rd_log, vmin)
-            if motion_confirmed: motion_map[moving_detection_mask] = rd_log[moving_detection_mask]
-            im.set_data(motion_map)
-
-            # --- Presence Detection Logic ---
-            range_ffts_stationary = fft(windowed_stationary_data, n=HIGH_RES_FFT_LEN, axis=1)[:, :HIGH_RES_FFT_LEN // 2]
-            stationary_profile_db = 20 * np.log10(np.mean(np.abs(range_ffts_stationary), axis=0) + 1e-10)
-            cfar_threshold_db = cfar_fast_1d(stationary_profile_db, PRESENCE_CFAR_REFS, PRESENCE_CFAR_GUARDS, PRESENCE_CFAR_BIAS)
-            stationary_target_indices = np.where(stationary_profile_db > cfar_threshold_db)[0]
+            detected_indices = np.where(
+                (phase_std_dev > PRESENCE_PHASE_STD_THRESHOLD) &
+                (avg_magnitude > PRESENCE_MAG_THRESHOLD)
+            )[0]
             
-            current_presence_ranges = high_res_range_axis[stationary_target_indices].tolist()
-            presence_history.append(current_presence_ranges)
-            presence_confirmed = check_temporal_filter(presence_history, MAX_RANGE_DIFF_M)
+            line_phase_std.set_ydata(phase_std_dev)
+            max_y = np.max(phase_std_dev) * 1.2
+            ax_presence.set_ylim([0, max(max_y, PRESENCE_PHASE_STD_THRESHOLD * 1.5)])
 
-            line_stationary_profile.set_ydata(stationary_profile_db)
-            line_stationary_thresh.set_ydata(cfar_threshold_db)
-            if presence_confirmed:
-                line_stationary_targets.set_data(current_presence_ranges, stationary_profile_db[stationary_target_indices])
+        # --- NEW: PRESENCE CONFIRMATION STATE MACHINE ---
+        is_detection_in_frame = len(detected_indices) > 0
+
+        if is_detection_in_frame:
+            # Find the range of the strongest detection in this frame
+            strongest_detection_idx = detected_indices[np.argmax(phase_std_dev[detected_indices])]
+            strongest_detection_range = range_axis[strongest_detection_idx]
+
+            if confirmation_hits == 0:
+                # This is the first hit of a potential new sequence
+                confirmation_hits = 1
+                last_detection_range = strongest_detection_range
             else:
-                line_stationary_targets.set_data([], [])
+                # This is a potential continuation of a sequence
+                frame_gap = frame_counter - last_detection_frame
+                range_diff = abs(strongest_detection_range - last_detection_range)
 
-            y_min, y_max = np.nanmin(stationary_profile_db), np.nanmax(stationary_profile_db)
-            ax_presence.set_ylim(y_min - 5 if np.isfinite(y_min) else 0, y_max + 5 if np.isfinite(y_max) else 60)
+                if frame_gap <= (MAX_FRAME_GAP_ALLOWED + 1) and range_diff <= MAX_RANGE_DIFFERENCE_METERS:
+                    # The detection is close in time and space: it's a valid continuation
+                    confirmation_hits += 1
+                    last_detection_range = strongest_detection_range # Update to the latest position
+                else:
+                    # The detection is too far in time or space; reset and start a new sequence
+                    confirmation_hits = 1
+                    last_detection_range = strongest_detection_range
             
-            # --- Print Final Status ---
-            print(f"\rFrame Status -> Presence: {'YES' if presence_confirmed else 'No '} | Motion: {'YES' if motion_confirmed else 'No '}", end="")
-
-            accumulated_rd_map.fill(0); frame_count = 0
-
-        fig.tight_layout(); fig.canvas.draw_idle(); plt.pause(0.01)
+            last_detection_frame = frame_counter # Always update the frame of the last raw detection
         
-    except KeyboardInterrupt: print("\nStopping..."); break
-    except Exception as e: print(f"An error occurred: {e}"); continue
+        else: # No detection in this frame
+            frame_gap = frame_counter - last_detection_frame
+            if frame_gap > MAX_FRAME_GAP_ALLOWED:
+                # The allowed gap has been exceeded, reset everything
+                confirmation_hits = 0
+                presence_confirmed = False
+
+        # Finally, update the official confirmation status
+        if confirmation_hits >= MIN_HITS_FOR_CONFIRMATION:
+            presence_confirmed = True
+        
+        # --- Update Plot ---
+        if is_detection_in_frame:
+            detected_ranges = range_axis[detected_indices]
+            presence_detections_scatter.set_offsets(np.c_[detected_ranges, phase_std_dev[detected_indices]])
+        else:
+            presence_detections_scatter.set_offsets(np.empty((0, 2)))
+
+        if presence_confirmed:
+            confirmation_text.set_text('STATUS: ✅ PRESENCE CONFIRMED')
+            confirmation_text.set_bbox(dict(boxstyle='round,pad=0.3', fc='lightgreen', alpha=0.8))
+        else:
+            confirmation_text.set_text(f'STATUS: NO PRESENCE (Hits: {confirmation_hits})')
+            confirmation_text.set_bbox(dict(boxstyle='round,pad=0.3', fc='lightgray', alpha=0.5))
+
+        # --- Print Final Status to Console ---
+        status_text = f"Status -> Confirmed: {'✅ YES' if presence_confirmed else 'No '} | Hits: {confirmation_hits}"
+        print(f"\r{status_text.ljust(50)}", end="")
+
+        fig.canvas.draw_idle()
+        plt.pause(0.001)
+
+    except KeyboardInterrupt:
+        print("\nStopping script.")
+        break
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
+        time.sleep(1)
+        continue
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+ser.close()
+plt.ioff()
+plt.show()
+print("Serial port closed. Program finished.")
